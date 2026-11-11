@@ -210,6 +210,15 @@ final class DialplanBuilderTest extends TestCase
         self::assertStringContainsString("Set(SL_SENT=1)\n\tsame => n,Gosub(status-lookup-end,s,1)", $conf);
     }
 
+    public function testPinIsCollectedByTheScriptNotByRead(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString("GotoIf(\$[\"\${SL_RESULT}\" != \"need_pin\"]?checked)\n\tsame => n,Set(SL_RESULT=fault)\n\tsame => n,AGI(status_lookup.php,pin,modulestatuslookup-enter-pin,5)", $conf);
+        self::assertStringNotContainsString('SL_PIN', $conf);
+        self::assertStringContainsString('GotoIf($["${SL_RESULT}" == "no_pin"]?operator)', $conf);
+    }
+
     public function testProblems(): void
     {
         self::assertSame([], DialplanBuilder::problems(['welcome' => null, 'enter_id' => 'x'], '2000'));

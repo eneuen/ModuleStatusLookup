@@ -24,6 +24,14 @@ use PDO;
  *   lookups in the last hour; the call goes straight to a person.
  * - fault: the record's status or its prompt can't be used. The caller is
  *   sent to a person, never left in silence.
+ * - need_pin: the status asks for the record's PIN; the lookup script asks
+ *   for it and looks up again with it. Nothing about the status is returned
+ *   before the PIN matches.
+ * - pin_failed / callerid_failed: a wrong PIN, or a caller number that isn't
+ *   the record's phone number when the status requires it. The caller hears
+ *   "not found", as for an unknown ID, so a guess learns nothing.
+ * - no_pin: the status asks for a PIN but the record has none; the caller is
+ *   put through to a person.
  *
  * Every value set here matches a fixed pattern: the dialplan uses them in
  * Playback and Goto.
@@ -32,7 +40,17 @@ use PDO;
  */
 final class Lookup
 {
-    public const array RESULTS = ['hit', 'invalid', 'not_found', 'expired', 'rate_limited', 'fault'];
+    public const array RESULTS = ['hit', 'invalid', 'not_found', 'expired', 'rate_limited', 'fault', 'need_pin', 'no_pin', 'pin_failed',
+        'callerid_failed'];
+
+    /** Caller numbers match a record's phone on their last digits, at least this many (country prefixes differ). */
+    public const int PHONE_DIGITS = 7;
+
+    /**
+     * Compared on at most this many last digits: beyond them, the same number is written with a country code
+     * or a national trunk prefix (+49 30 1234567, 030 1234567; +7 916..., 8 916...).
+     */
+    public const int PHONE_COMPARE = 9;
 
     public const array EXTRAS = ['none', 'id', 'date'];
 
@@ -51,12 +69,14 @@ final class Lookup
     /**
      * @param array<string, int|string> $settings Settings::load()
      * @param callable(int): ?string $promptPath A PBX sound file ID => path for Playback, or null.
+     * @param Pin|null $pin Checks PINs; null when no PIN can be checked (then a status that asks for one puts the caller through).
      */
     public function __construct(
         private readonly PDO $db,
         private readonly array $settings,
         private readonly DateTimeZone $timezone,
         private $promptPath,
+        private readonly ?Pin $pin = null,
     ) {
     }
 
@@ -64,10 +84,11 @@ final class Lookup
      * @param string $input What the caller typed (Read's result).
      * @param string $caller The caller's number, digits only; '' when withheld.
      * @param int $missesThisCall Failed tries earlier in this call, not yet in the log.
+     * @param string|null $typedPin The PIN the caller typed, on the second lookup of a status that asks for one.
      *
      * @return array<string, string> Channel variable => value; every SL_ variable is set.
      */
-    public function find(string $input, string $caller, int $missesThisCall, int $now): array
+    public function find(string $input, string $caller, int $missesThisCall, int $now, ?string $typedPin = null): array
     {
         $vars = ['SL_RESULT' => '', 'SL_ID' => '', 'SL_STATUS' => '', 'SL_PROMPT' => '', 'SL_EXTRA' => 'none',
             'SL_DATE' => '', 'SL_ACTION' => '', 'SL_TRANSFER' => ''];
@@ -81,8 +102,8 @@ final class Lookup
         }
         $vars['SL_ID'] = $input;
 
-        $stmt = $this->db->prepare('SELECT r.status_code, r.status_date, r.expires_on, s.code, s.prompt_id, s.spoken_extra,
-                s.after_action, s.transfer_number
+        $stmt = $this->db->prepare('SELECT r.status_code, r.status_date, r.expires_on, r.pin_hash, r.phone, s.code, s.prompt_id, s.spoken_extra,
+                s.after_action, s.transfer_number, s.requires_pin, s.requires_callerid
             FROM m_StatusLookupRecords r LEFT JOIN m_StatusLookupStatuses s ON s.code = r.status_code
             WHERE r.lookup_id = ?');
         $stmt->execute([$input]);
@@ -95,6 +116,23 @@ final class Lookup
         $expires = (string)($row['expires_on'] ?? '');
         if ($expires !== '' && (preg_match(self::DATE_PATTERN, $expires) !== 1 || $expires < $today)) {
             return ['SL_RESULT' => 'expired'] + $vars;
+        }
+
+        // The status's own checks come before anything about it is returned: first the caller's number, then the PIN.
+        if (($row['requires_callerid'] ?? '0') === '1' && !self::samePhone($caller, (string)($row['phone'] ?? ''))) {
+            return ['SL_RESULT' => 'callerid_failed'] + $vars;
+        }
+        if (($row['requires_pin'] ?? '0') === '1') {
+            $stored = (string)($row['pin_hash'] ?? '');
+            if ($stored === '' || $this->pin === null) {
+                return ['SL_RESULT' => 'no_pin'] + $vars;
+            }
+            if ($typedPin === null) {
+                return ['SL_RESULT' => 'need_pin'] + $vars;
+            }
+            if (!$this->pin->matches($typedPin, $stored)) {
+                return ['SL_RESULT' => 'pin_failed'] + $vars;
+            }
         }
 
         $prompt = $row['code'] === null ? null : ($this->promptPath)((int)($row['prompt_id'] ?? 0));
@@ -135,6 +173,25 @@ final class Lookup
         $min = max(2, min(20, (int)$settings['id_min_length']));
 
         return [$min, max($min, min(20, (int)$settings['id_max_length']))];
+    }
+
+    /**
+     * Whether a caller's number is the record's phone number: both digits
+     * only, compared on their last digits (the shorter one's length, at
+     * most PHONE_COMPARE and at least PHONE_DIGITS), so +49 30 1234567 and
+     * 030 1234567 match. A
+     * withheld number or a record without a phone never matches.
+     */
+    public static function samePhone(string $caller, string $phone): bool
+    {
+        $a = self::digits($caller);
+        $b = self::digits($phone);
+        $n = min(strlen($a), strlen($b), self::PHONE_COMPARE);
+        if ($n < self::PHONE_DIGITS) {
+            return false;
+        }
+
+        return substr($a, -$n) === substr($b, -$n);
     }
 
     /** Digits only, at most 32 of them: what the module keeps of a caller's number. */

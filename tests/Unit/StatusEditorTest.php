@@ -54,6 +54,16 @@ final class StatusEditorTest extends TestCase
         self::assertSame([2, 0], array_column($list, 'records'));
     }
 
+    public function testRequirements(): void
+    {
+        $id = $this->editor->save(self::input(['requires_pin' => true, 'requires_callerid' => 'false']));
+        $row = $this->editor->list()[0];
+        self::assertSame([true, false], [$row['requires_pin'], $row['requires_callerid']]);
+        $this->editor->save(self::input(['id' => $id, 'requires_pin' => false, 'requires_callerid' => 'true']));
+        $row = $this->editor->list()[0];
+        self::assertSame([false, true], [$row['requires_pin'], $row['requires_callerid']]);
+    }
+
     public function testTransferNumberOnlyKeptForTransfers(): void
     {
         $id = $this->editor->save(self::input(['transfer_number' => '201']));

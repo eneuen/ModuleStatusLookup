@@ -135,7 +135,10 @@
 .sl-page .sl-visually-hidden, #sl-status-modal .sl-visually-hidden {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
-#sl-status-modal .sl-note, #sl-confirm-modal .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-2); }
+#sl-status-modal .sl-note, #sl-record-modal .sl-note, #sl-confirm-modal .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-2); }
+/* A checkbox's hint lines up with its label, not the box. */
+#sl-status-modal .sl-check-hint, #sl-record-modal .sl-check-hint { margin: var(--sl-space-1, 4px) 0 0 1.85em; }
+.sl-page .sl-pin-mark { color: var(--sl-muted); margin-left: .35em; font-size: .85em; }
 #sl-status-modal .sl-code-input { font-family: SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase; }
 /* The status dialog's prompt menu: as on the page (the modal sits outside .sl-page). */
 #sl-status-modal .sl-prompt-control { display: flex; align-items: stretch; gap: var(--sl-space-2); }
@@ -231,3 +234,6 @@
 .sl-page tr.sl-test-call td { color: var(--sl-muted); }
 .sl-page .sl-test { margin-top: var(--sl-space-4); }
 .sl-page .sl-test .ui.dropdown { min-width: 16em; }
+.sl-page .sl-days-input { max-width: 12em; }
+.sl-page .sl-forget { margin-top: var(--sl-space-6); padding-top: var(--sl-space-4); border-top: 1px solid var(--sl-border); }
+.sl-page .sl-forget > .ui.header { margin: 0; }

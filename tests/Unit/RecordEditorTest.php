@@ -8,6 +8,7 @@ namespace Modules\ModuleStatusLookup\Tests\Unit;
 
 use DateTimeZone;
 use Modules\ModuleStatusLookup\Lib\EditorException;
+use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Lib\RecordEditor;
 use Modules\ModuleStatusLookup\Tests\Unit\Support\TestDatabases;
 use PDO;
@@ -27,7 +28,7 @@ final class RecordEditorTest extends TestCase
     {
         $this->db = TestDatabases::module();
         $this->db->exec("INSERT INTO m_StatusLookupStatuses (code, name) VALUES ('READY', 'Ready'), ('PARTS', 'Parts')");
-        $this->editor = new RecordEditor($this->db, new DateTimeZone('Europe/Berlin'));
+        $this->editor = new RecordEditor($this->db, new DateTimeZone('Europe/Berlin'), new Pin(str_repeat('k', 64)));
     }
 
     private function add(string $id, array $override = [], int $at = self::NOW): int
@@ -156,6 +157,38 @@ final class RecordEditorTest extends TestCase
         }
     }
 
+    public function testPinIsStoredAsAHashKeptWhenEmptyAndRemovable(): void
+    {
+        $id = $this->add('10445', ['pin' => '4821', 'phone' => '+49 (30) 123-4567']);
+        $hash = fn (): string => (string)$this->db->query("SELECT pin_hash FROM m_StatusLookupRecords WHERE id = $id")->fetchColumn();
+        $first = $hash();
+        self::assertTrue((new Pin(str_repeat('k', 64)))->matches('4821', $first));
+        $row = $this->editor->list([], self::NOW)['rows'][0];
+        self::assertSame([true, '49301234567'], [$row['has_pin'], $row['phone']]);
+        self::assertArrayNotHasKey('pin_hash', $row);
+
+        $this->add('10445', ['id' => (string)$id, 'note' => 'changed']);                       // no PIN given: kept
+        self::assertSame($first, $hash());
+        $this->add('10445', ['id' => (string)$id, 'remove_pin' => true]);
+        self::assertSame('', $hash());
+        self::assertFalse($this->editor->list([], self::NOW)['rows'][0]['has_pin']);
+    }
+
+    public function testBadPinAndPhoneRefused(): void
+    {
+        foreach ([['pin' => '123'], ['pin' => '12a4'], ['phone' => 'call me'], ['phone' => str_repeat('1', 21)]] as $bad) {
+            try {
+                $this->add('10445', $bad);
+                self::fail('accepted ' . json_encode($bad));
+            } catch (EditorException $e) {
+                self::assertContains($e->errorCode, ['pin', 'phone']);
+            }
+        }
+        // Without a PIN key no PIN can be set.
+        $this->expectException(EditorException::class);
+        (new RecordEditor($this->db, new DateTimeZone('UTC')))->save(['lookup_id' => '10446', 'status_code' => 'READY', 'pin' => '4821'], [4, 10], 'a', 1);
+    }
+
     public function testCountOutside(): void
     {
         $this->add('10445');
@@ -176,8 +209,8 @@ final class RecordEditorTest extends TestCase
             $out .= $line;
         });
 
-        self::assertSame("lookup_id,status_code,note,pin,expires,date\r\n"
-            . "00451,READY,\"'=HYPERLINK(\"\"x\"\")\",,2026-11-30,\r\n"
-            . "10445,PARTS,\"iPhone, 13\",,,2026-11-12\r\n", $out);
+        self::assertSame("lookup_id,status_code,note,pin,expires,date,phone\r\n"
+            . "00451,READY,\"'=HYPERLINK(\"\"x\"\")\",,2026-11-30,,\r\n"
+            . "10445,PARTS,\"iPhone, 13\",,,2026-11-12,\r\n", $out);
     }
 }

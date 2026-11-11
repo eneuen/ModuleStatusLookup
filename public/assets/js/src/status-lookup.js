@@ -73,6 +73,7 @@ const state = { tab: null, options: null, callFlow: null, dirty: false };
 const FIELDS = {
   welcome_prompt_id: ['sl_PromptWelcome', 'Welcome'],
   enter_id_prompt_id: ['sl_PromptEnterId', 'Ask for the ID'],
+  enter_pin_prompt_id: ['sl_PromptEnterPin', 'Ask for the PIN'],
   invalid_prompt_id: ['sl_PromptInvalid', 'Invalid Entry'],
   not_found_prompt_id: ['sl_PromptNotFound', 'Not Found'],
   repeat_prompt_id: ['sl_PromptRepeat', 'Repeat Menu'],
@@ -85,6 +86,7 @@ const FIELDS = {
   max_tries: ['sl_MaxTries', 'Tries'],
   miss_limit_caller: ['sl_MissLimitCaller', 'Per Caller Number'],
   miss_limit_total: ['sl_MissLimitTotal', 'All Callers Together'],
+  log_retention_days: ['sl_LogRetention', 'Keep the Call Log For'],
   operator_number: ['sl_Operator', 'Operator'],
   too_many_tries_number: ['sl_TooManyTries', 'After the Last Try'],
   fault_number: ['sl_FaultDestination', 'When a Lookup Fails'],
@@ -152,6 +154,10 @@ const ERRORS = {
   test_extension: ['sl_Err_test_extension', 'Choose an extension from the list.'],
   range_dates: ['sl_Err_range_dates', 'Choose a start date on or before the end date.'],
   range_long: ['sl_Err_range_long', 'Choose a period of up to {max} days.'],
+  forget_id: ['sl_Err_forget_id', 'Enter the ID, as callers type it.'],
+  forget_phone: ['sl_Err_forget_phone', 'Enter the number with at least {min} digits.'],
+  pin: ['sl_Err_pin', 'Enter the PIN as 4 to 8 digits.'],
+  phone: ['sl_Err_phone', 'Enter the phone number as digits, up to 20, such as 4915112345678.'],
   number_in_use: ['sl_Err_number_in_use', 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.'],
 };
 
@@ -209,6 +215,13 @@ function field(labelText, control, hint, width) {
   const target = control.classList.contains('sl-prompt-control') ? control.querySelector('select') : control;
   return el('div', { class: `${width ? `${width} wide ` : ''}field` },
     el('label', { for: target.id, text: labelText }), control, hint ? el('div', { class: 'sl-note', text: hint }) : null);
+}
+
+/** A checkbox with its label and, below, a hint. */
+function checkboxField(id, checked, labelText, hint) {
+  return el('div', { class: 'field' },
+    el('div', { class: 'ui checkbox' }, el('input', { type: 'checkbox', id, checked: !!checked }), el('label', { for: id, text: labelText })),
+    hint ? el('div', { class: 'sl-note sl-check-hint', text: hint }) : null);
 }
 
 function numberInput(id, value, min, max) {
@@ -401,6 +414,7 @@ function destinationOptions(emptyText, value = '') {
 const PROMPTS = [
   ['welcome_prompt_id', ['welcome'], true, ['sl_PromptWelcomeHint', 'Played once, as the call is answered. Callers can start typing during it.']],
   ['enter_id_prompt_id', ['enter-id'], false, ['sl_PromptEnterIdHint', 'Asks for the ID and says that 0 reaches someone.']],
+  ['enter_pin_prompt_id', ['enter-pin'], false, ['sl_PromptEnterPinHint', 'Only for statuses that ask for the record\'s PIN.']],
   ['invalid_prompt_id', ['invalid'], false, ['sl_PromptInvalidHint', 'After an entry that is too short, too long or empty.']],
   ['not_found_prompt_id', ['not-found'], false, ['sl_PromptNotFoundHint', 'After an ID that isn\'t found or has expired.']],
   ['repeat_prompt_id', ['repeat'], false, ['sl_PromptRepeatHint', 'After a status: 1 to hear it again, 0 for someone.']],
@@ -486,6 +500,13 @@ function renderCallFlow(data) {
       el('div', { class: 'two fields' },
         field(fieldName('miss_limit_caller'), numberInput('sl-miss_limit_caller', s.miss_limit_caller, 0, 1000)),
         field(fieldName('miss_limit_total'), numberInput('sl-miss_limit_total', s.miss_limit_total, 0, 100000)))),
+    section(t('sl_SectionPrivacy', 'Privacy'), t('sl_SectionPrivacyHint', 'The call log holds callers\' numbers and the IDs they typed. Old calls are deleted every night; the daily totals on the Activity tab stay, without numbers.'),
+      field(fieldName('log_retention_days'), el('div', { class: 'ui right labeled input sl-days-input' },
+        numberInput('sl-log_retention_days', s.log_retention_days, 0, 3650), el('div', { class: 'ui basic label', text: t('sl_Days', 'days') })),
+      retentionHint()),
+      checkboxField('sl-purge_expired', s.purge_expired === '1', t('sl_PurgeExpired', 'Delete expired records every night'),
+        t('sl_PurgeExpiredHint', 'Records are deleted the day after their last day. Off: they stay, and callers hear "not found".')),
+      forgetPart()),
     el('div', { class: 'sl-settings-save' },
       el('button', { class: 'ui primary button', type: 'submit', id: 'sl-save' }, t('sl_SaveChanges', 'Save Changes')),
       el('span', { class: 'sl-actions-hint', id: 'sl-save-hint' })));
@@ -495,6 +516,7 @@ function renderCallFlow(data) {
     section(t('sl_SectionNumber', 'Where Callers Come From'), null, numberForm, usedBy(data)),
     form);
   initPromptMenus(box);
+  $(form).find('.ui.checkbox').checkbox();
   $(box).find('select.ui.dropdown:not(.sl-prompt-select)').dropdown({ fullTextSearch: true, placeholder: false });
   form.addEventListener('input', markDirty);
   form.addEventListener('change', markDirty);
@@ -521,15 +543,61 @@ function testCallRow(data) {
 function markDirty(e) {
   // Typing in a menu's search box only filters it; choosing an entry fires change.
   if (e && e.target && e.target.matches && e.target.matches('.ui.dropdown input.search')) return;
+  if (e && e.target && e.target.closest && e.target.closest('.sl-forget')) return;
   state.dirty = true;
   $id('sl-save-hint').textContent = t('sl_UnsavedChanges', 'Unsaved changes');
+}
+
+/** What 0 days means on this PBX: its call-history period, or for ever. */
+function retentionHint() {
+  const cdr = state.options.cdrDays || 0;
+  return cdr >= 30
+    ? plural('sl_RetentionCdr', cdr, { one: '0: as long as the PBX keeps its call history (now {n} day).', other: '0: as long as the PBX keeps its call history (now {n} days).' })
+    : t('sl_RetentionForever', '0: as long as the PBX keeps its call history, which is now for ever.');
+}
+
+/**
+ * Forget one ID or one caller number, for requests to delete someone's data.
+ * Inside the call-flow form, but not part of it: typing here isn't an unsaved
+ * change, and Enter forgets instead of saving.
+ */
+function forgetPart() {
+  const row = (id, labelText, placeholder, action, title, text, done) => {
+    const input = el('input', { type: 'text', id, inputmode: 'numeric', maxlength: '24', placeholder, autocomplete: 'off' });
+    const button = el('button', { class: 'ui basic red button', type: 'button', onclick: () => {
+      const value = input.value.trim();
+      if (!value) { input.focus(); return; }
+      confirmDialog(title, sub(text, { value }), t('sl_Forget', 'Forget')).then((ok) => {
+        if (!ok) return;
+        busy(button, () => post(action, action === 'forgetId' ? { id: value } : { phone: value })
+          .then((d) => { input.value = ''; $id('sl-forget-note').textContent = done(d); })
+          .fail((xhr) => showError(saveFailed(xhr))));
+      });
+    } }, t('sl_Forget', 'Forget'));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); button.click(); } });
+    return el('div', { class: 'sl-inline' }, field(labelText, input), button);
+  };
+  return el('div', { class: 'sl-forget' },
+    el('h5', { class: 'ui header', text: t('sl_SectionForget', 'Forget Someone\'s Data') }),
+    el('div', { class: 'sl-note', text: t('sl_SectionForgetHint', 'For a customer who asks to have their data deleted. This can\'t be undone; the PBX\'s system log notes who did it, without the ID or number.') }),
+    el('div', {},
+      row('sl-forget-id', t('sl_ForgetId', 'An ID'), '10445', 'forgetId', t('sl_ForgetIdTitle', 'Forget This ID?'),
+        t('sl_ForgetIdText', 'The record {value} and every call that typed it are deleted.'),
+        (d) => `${d.records ? t('sl_ForgotRecord', 'The record was deleted.') : t('sl_ForgotNoRecord', 'There was no record with this ID.')} ${
+          plural('sl_ForgotCalls', d.calls, { one: '{n} call was deleted from the call log.', other: '{n} calls were deleted from the call log.' })}`),
+      row('sl-forget-phone', t('sl_ForgetPhone', 'A caller number'), '4915112345678', 'forgetCaller', t('sl_ForgetPhoneTitle', 'Forget This Number?'),
+        t('sl_ForgetPhoneText', 'Every call from {value} is deleted, and the number is removed from records. Numbers match on their last digits, as for the caller-ID check.'),
+        (d) => `${plural('sl_ForgotCalls', d.calls, { one: '{n} call was deleted from the call log.', other: '{n} calls were deleted from the call log.' })} ${
+          plural('sl_ForgotPhones', d.records, { one: 'The number was removed from {n} record.', other: 'The number was removed from {n} records.' })}`)),
+    el('div', { class: 'sl-note', id: 'sl-forget-note', role: 'status' }));
 }
 
 function readCallFlow() {
   const values = {};
   PROMPTS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
   NUMBER_FIELDS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
-  ['operator_number', 'too_many_tries_number', 'fault_number', 'miss_limit_caller', 'miss_limit_total'].forEach((f) => { values[f] = $id(`sl-${f}`).value; });
+  ['operator_number', 'too_many_tries_number', 'fault_number', 'miss_limit_caller', 'miss_limit_total', 'log_retention_days'].forEach((f) => { values[f] = $id(`sl-${f}`).value; });
+  values.purge_expired = $id('sl-purge_expired').checked;
   return values;
 }
 
@@ -642,7 +710,9 @@ function statusRow(s, index, all) {
     el('td', {}, el('div', { text: s.name }), el('div', { class: 'sl-sub-line sl-code', text: s.code })),
     el('td', {}, el('div', { class: 'sl-prompt-cell' }, name ? listen : null, name ? el('span', { text: name }) : missing),
       !name && s.script ? el('div', { class: 'sl-sub-line sl-script', text: `“${s.script}”` }) : null,
-      s.spoken_extra !== 'none' ? el('div', { class: 'sl-sub-line', text: `+ ${label(EXTRAS[s.spoken_extra])}` }) : null),
+      s.spoken_extra !== 'none' ? el('div', { class: 'sl-sub-line', text: `+ ${label(EXTRAS[s.spoken_extra])}` }) : null,
+      s.requires_pin ? el('div', { class: 'sl-sub-line' }, el('i', { class: 'lock icon' }), t('sl_AsksPin', 'Asks for the record\'s PIN')) : null,
+      s.requires_callerid ? el('div', { class: 'sl-sub-line' }, el('i', { class: 'phone icon' }), t('sl_OwnPhoneOnly', 'Only for the record\'s phone number')) : null),
     s.after_action === 'transfer' && !state.options.destinations.some((d) => d.value === s.transfer_number)
       ? el('td', { class: 'sl-warn-text', text: sub(t('sl_TransferGone', 'Put through to {number}, which no longer exists: choose another'), { number: s.transfer_number }) })
       : el('td', { text: afterText(s) }),
@@ -739,7 +809,7 @@ function moveStatus(id, step) {
 
 /** The status dialog: add (null) or edit one. */
 function openStatus(s) {
-  const v = s || { code: '', name: '', script: '', prompt_id: '', spoken_extra: 'none', after_action: 'repeat', transfer_number: '' };
+  const v = s || { code: '', name: '', script: '', prompt_id: '', spoken_extra: 'none', after_action: 'repeat', transfer_number: '', requires_pin: false, requires_callerid: false };
   const files = state.options.soundFiles.map((f) => [f.id, f.name]);
   const transferField = field(t('sl_TransferTo', 'Put Through To'),
     select('sl-status-transfer', destinationOptions(t('sl_ChooseDestination', 'Choose…'), v.transfer_number), v.transfer_number, { class: 'ui search dropdown' }));
@@ -759,7 +829,14 @@ function openStatus(s) {
     field(t('sl_StatusExtra', 'Then Also Say'), select('sl-status-extra', Object.entries(EXTRAS).map(([k, pair]) => [k, label(pair)]), v.spoken_extra, { class: 'ui dropdown' }),
       t('sl_StatusExtraHint', 'The date is the one stored with each record, such as a shipping date.')),
     field(t('sl_StatusAfter', 'After That'), select('sl-status-after', Object.entries(ACTIONS).map(([k, pair]) => [k, label(pair)]), v.after_action, { class: 'ui dropdown' })),
-    transferField);
+    transferField,
+    el('div', { class: 'grouped fields' },
+      el('label', { text: t('sl_StatusPrivacy', 'Who Hears It') }),
+      checkboxField('sl-status-pin', v.requires_pin, t('sl_StatusPin', 'Ask for the record\'s PIN first'),
+        t('sl_StatusPinHint', 'For private statuses. Callers whose record has no PIN are put through to the operator.')),
+      checkboxField('sl-status-callerid', v.requires_callerid, t('sl_StatusCallerId', 'Only when calling from the record\'s phone number'),
+        t('sl_StatusCallerIdHint', 'Other callers hear "not found". Records without a phone number are never told.'))));
+  $(form).find('.ui.checkbox').checkbox();
   const after = $id('sl-status-after');
   const showTransfer = () => transferField.classList.toggle('sl-hidden', after.value !== 'transfer');
   after.addEventListener('change', showTransfer);
@@ -784,6 +861,8 @@ function saveStatus(id) {
     spoken_extra: $id('sl-status-extra').value,
     after_action: $id('sl-status-after').value,
     transfer_number: $id('sl-status-transfer').value,
+    requires_pin: $id('sl-status-pin').checked,
+    requires_callerid: $id('sl-status-callerid').checked,
   };
   busy($id('sl-status-save'), () => post('saveStatus', { status: JSON.stringify(status) })
     .then((d) => { $('#sl-status-modal').modal('hide'); renderStatuses(d.statuses); })
@@ -901,7 +980,9 @@ function recordRow(r, today) {
   box.addEventListener('change', () => { if (box.checked) records.selected.add(r.id); else records.selected.delete(r.id); renderRecords(); });
   return el('tr', { class: expired ? 'sl-expired' : '' },
     el('td', { class: 'sl-check-cell' }, box),
-    el('td', { class: 'sl-code', text: r.lookup_id }),
+    el('td', {}, el('div', { class: 'sl-code' }, r.lookup_id,
+      r.has_pin ? el('i', { class: 'lock icon sl-pin-mark', title: t('sl_HasPin', 'Has a PIN'), 'aria-label': t('sl_HasPin', 'Has a PIN') }) : null),
+    r.phone ? el('div', { class: 'sl-sub-line', text: r.phone }) : null),
     el('td', {}, statusLabel(r.status_code)),
     el('td', { class: 'sl-nowrap', text: isoText(r.status_date) }),
     el('td', { class: 'sl-nowrap' }, expired ? el('span', { class: 'sl-warn-text', text: sub(t('sl_ExpiredOn', 'Expired {date}'), { date: isoText(r.expires_on) }) }) : isoText(r.expires_on)),
@@ -983,7 +1064,7 @@ function loadRecordsTab() {
 }
 
 function openRecord(r) {
-  const v = r || { lookup_id: '', status_code: state.statuses[0].code, note: '', status_date: '', expires_on: '' };
+  const v = r || { lookup_id: '', status_code: state.statuses[0].code, note: '', status_date: '', expires_on: '', phone: '', has_pin: false };
   const form = $id('sl-record-form');
   fill(form,
     el('div', { class: 'two fields' },
@@ -993,8 +1074,17 @@ function openRecord(r) {
     field(t('sl_ColNote', 'Note'), el('input', { type: 'text', id: 'sl-record-note', value: v.note, maxlength: '200' }), t('sl_RecordNoteHint', 'For staff only; never read out to callers.')),
     el('div', { class: 'two fields' },
       field(t('sl_ColDate', 'Date'), el('input', { type: 'date', id: 'sl-record-date', value: v.status_date }), t('sl_RecordDateHint', 'Spoken after the status, if the status says so.')),
-      field(t('sl_ColLastDay', 'Last Day'), el('input', { type: 'date', id: 'sl-record-expires', value: v.expires_on }), t('sl_RecordExpiresHint', 'After this day, callers hear "not found". Empty: no end.'))));
+      field(t('sl_ColLastDay', 'Last Day'), el('input', { type: 'date', id: 'sl-record-expires', value: v.expires_on }), t('sl_RecordExpiresHint', 'After this day, callers hear "not found". Empty: no end.'))),
+    el('div', { class: 'two fields' },
+      field(t('sl_ColPhone', 'Phone'), el('input', { type: 'tel', id: 'sl-record-phone', value: v.phone, inputmode: 'numeric', maxlength: '24', autocomplete: 'off' }),
+        t('sl_RecordPhoneHint', 'The customer\'s number, for statuses told only to the record\'s own phone.')),
+      field(t('sl_ColPin', 'PIN'), el('input', { type: 'password', id: 'sl-record-pin', value: '', inputmode: 'numeric', maxlength: '8', autocomplete: 'new-password',
+        placeholder: v.has_pin ? t('sl_PinKept', 'Unchanged') : '' }),
+      v.has_pin ? t('sl_RecordPinSetHint', 'This record has a PIN; it can\'t be shown. Type a new one to replace it.')
+        : t('sl_RecordPinHint', '4 to 8 digits, for statuses that ask for one. Stored scrambled; it can\'t be shown later.'))),
+    v.has_pin ? checkboxField('sl-record-remove-pin', false, t('sl_RemovePin', 'Remove the PIN')) : null);
   $(form).find('select.ui.dropdown').dropdown({ placeholder: false });
+  $(form).find('.ui.checkbox').checkbox();
   $id('sl-record-title').textContent = r ? t('sl_EditRecord', 'Edit Record') : t('sl_AddRecordTitle', 'Add Record');
   const save = () => saveRecord(r ? r.id : null);
   $id('sl-record-save').onclick = save;
@@ -1011,6 +1101,9 @@ function saveRecord(id) {
     note: $id('sl-record-note').value,
     status_date: $id('sl-record-date').value,
     expires_on: $id('sl-record-expires').value,
+    phone: $id('sl-record-phone').value,
+    pin: $id('sl-record-pin').value,
+    remove_pin: !!($id('sl-record-remove-pin') && $id('sl-record-remove-pin').checked),
   };
   busy($id('sl-record-save'), () => post('saveRecord', { record: JSON.stringify(record) })
     .then(() => { $('#sl-record-modal').modal('hide'); return loadRecords(); })
@@ -1052,7 +1145,8 @@ const REJECT_REASONS = {
   duplicate: ['sl_Reject_duplicate', 'Same ID as an earlier row (row number in brackets)'],
   status: ['sl_Reject_status', 'Unknown status code'],
   note: ['sl_Reject_note', 'Note longer than 200 characters'],
-  pin: ['sl_Reject_pin', 'PINs aren\'t supported yet'],
+  pin: ['sl_Reject_pin', 'PIN isn\'t 4 to 8 digits'],
+  phone: ['sl_Reject_phone', 'Phone isn\'t a phone number (digits, up to 20)'],
   expires: ['sl_Reject_expires', 'Last day isn\'t a date (YYYY-MM-DD)'],
   date: ['sl_Reject_date', 'Date isn\'t a date (YYYY-MM-DD)'],
 };
@@ -1063,7 +1157,7 @@ const MODES = {
 
 const importState = { file: null, preview: null, mode: 'update' };
 
-const EXAMPLE_CSV = 'lookup_id,status_code,note,pin,expires,date\r\n10445,READY,Toyota Vios,,2026-11-30,\r\n10446,PARTS,iPhone 13 screen,,,\r\n00451,SHIPPED,,,,2026-11-12\r\n';
+const EXAMPLE_CSV = 'lookup_id,status_code,note,pin,expires,date,phone\r\n10445,READY,Toyota Vios,,2026-11-30,,\r\n10446,PARTS,iPhone 13 screen,4821,,,4915112345678\r\n00451,SHIPPED,,,,2026-11-12,\r\n';
 
 function download(filename, blob) {
   const url = URL.createObjectURL(blob);
@@ -1191,7 +1285,7 @@ function renderImport(done) {
       el('div', { class: 'sl-section-actions' },
         el('button', { class: 'ui basic button', type: 'button', onclick: () => download('status-lookup-example.csv', new Blob([EXAMPLE_CSV], { type: 'text/csv' })) },
           el('i', { class: 'download icon' }), t('sl_DownloadExample', 'Download Example')))),
-    el('div', { class: 'sl-note sl-narrow', text: t('sl_ImportHint', 'A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date are optional, as YYYY-MM-DD. Export CSV on the Records tab writes the same format. Nothing changes until you check the file and press Import.') }),
+    el('div', { class: 'sl-note sl-narrow', text: t('sl_ImportHint', 'A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date (as YYYY-MM-DD), pin (4 to 8 digits) and phone are optional. An empty pin keeps the record\'s PIN. Export CSV on the Records tab writes the same format, without PINs. Nothing changes until you check the file and press Import.') }),
     el('div', { class: 'ui form sl-import-form' }, drop,
       el('div', { class: 'sl-inline' }, field(t('sl_ImportMode', 'Mode'), mode),
         el('button', { class: 'ui button', type: 'button', id: 'sl-import-check', onclick: checkFile }, t('sl_CheckFile', 'Check File'))),

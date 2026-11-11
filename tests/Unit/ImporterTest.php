@@ -8,6 +8,7 @@ namespace Modules\ModuleStatusLookup\Tests\Unit;
 
 use Modules\ModuleStatusLookup\Lib\EditorException;
 use Modules\ModuleStatusLookup\Lib\Importer;
+use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Tests\Unit\Support\TestDatabases;
 use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -139,6 +140,34 @@ final class ImporterTest extends TestCase
         } catch (EditorException $e) {
             self::assertSame('file_rows', $e->errorCode);
         }
+    }
+
+    public function testPinsAndPhones(): void
+    {
+        $pin = new Pin(str_repeat('k', 64));
+        $importer = new Importer("lookup_id,status_code,note,pin,phone\n10445,READY,=Toyota,4821,+49 30 1234567\n20001,PARTS,,,\n",
+            [4, 10], ['READY', 'PARTS'], $pin);
+        self::assertSame(['added' => 0, 'updated' => 1, 'unchanged' => 1], array_slice($importer->preview($this->db, 'update'), 0, 3));
+        $importer->apply($this->db, 'update', 'admin', 'x.csv', self::NOW);
+        $row = $this->db->query("SELECT pin_hash, phone FROM m_StatusLookupRecords WHERE lookup_id = '10445'")->fetch(PDO::FETCH_ASSOC);
+        self::assertTrue($pin->matches('4821', $row['pin_hash']));
+        self::assertSame('49301234567', $row['phone']);
+
+        // The same PIN again is no change; an empty PIN cell keeps the PIN; a file without a phone column keeps phones.
+        $again = new Importer("lookup_id,status_code,note,pin\n10445,READY,=Toyota,4821\n", [4, 10], ['READY'], $pin);
+        self::assertSame(1, $again->preview($this->db, 'update')['unchanged']);
+        (new Importer("lookup_id,status_code,note,pin\n10445,READY,=Toyota changed,\n", [4, 10], ['READY'], $pin))
+            ->apply($this->db, 'update', 'admin', 'y.csv', self::NOW);
+        $row = $this->db->query("SELECT pin_hash, phone FROM m_StatusLookupRecords WHERE lookup_id = '10445'")->fetch(PDO::FETCH_ASSOC);
+        self::assertTrue($pin->matches('4821', $row['pin_hash']));
+        self::assertSame('49301234567', $row['phone']);
+    }
+
+    public function testBadPinsAndPhonesLeftOut(): void
+    {
+        $preview = (new Importer("lookup_id,status_code,pin,phone\n50001,READY,12,\n50002,READY,,call me\n", [4, 10], ['READY'],
+            new Pin(str_repeat('k', 64))))->preview($this->db, 'update');
+        self::assertSame(['pin', 'phone'], array_column($preview['report'], 'reason'));
     }
 
     public function testReplaceKeepsRecordsWhoseRowWasLeftOut(): void

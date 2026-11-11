@@ -38,6 +38,7 @@ export MIKOPBX_CONTAINER=mikopbx-dev       # default
 python3 tools/callsim/callsim.py setup      # objects, network, phones; waits for registration
 python3 tools/callsim/probe.py list         # scenarios
 python3 tools/callsim/probe.py run          # all scenarios, or name some
+python3 tools/callsim/api_check.py          # the REST API: API key access, refusals, localhost
 python3 tools/callsim/callsim.py teardown   # remove everything CallSim created
 ```
 
@@ -77,6 +78,7 @@ Every scenario that completes a call also checks the one call-log row the worker
 | --- | --- |
 | `callsim.py` | Driver: setup and teardown of the phones, carrier and PBX objects; call and call-record helpers |
 | `probe.py` | The scenarios |
+| `api_check.py` | The REST API checks (after `setup`: one request comes from the phone container) |
 | `page_client.py` | Calls the module page's actions as the page does |
 | `ctl.py` | Small client for baresip's netstring/JSON control protocol |
 | `phone.py` | Container entry point: starts one baresip per account |

@@ -33,7 +33,7 @@ final class Handoff
         'SL_TRIES'   => ['tries', '/^[0-9]{1,2}\z/'],
         'SL_MISSES'  => ['misses', '/^[0-9]{1,2}\z/'],
         'SL_OUTCOME' => ['outcome', '/^(hit|operator|too_many|rate_limited|fault|inactive|abandoned)\z/'],
-        'SL_RESULT'  => ['last_result', '/^(|hit|invalid|not_found|expired|rate_limited|fault)\z/'],
+        'SL_RESULT'  => ['last_result', '/^(|hit|invalid|not_found|expired|rate_limited|fault|need_pin|no_pin|pin_failed|callerid_failed)\z/'],
         'SL_ID'      => ['id_entered', '/^[0-9]{0,20}\z/'],
         'SL_STATUS'  => ['status_code', '/^[A-Z0-9_]{0,32}\z/'],
         'SL_TARGET'  => ['target', '/^[0-9]{0,8}\z/'],

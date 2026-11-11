@@ -26,6 +26,10 @@ require_once 'Globals.php';
  * Requests from the module's page arrive on StatusLookupConf::COMMANDS_TUBE:
  * a test call, which needs the AMI connection the web process doesn't have.
  *
+ * Every night (and a minute after the worker starts) it deletes calls past
+ * the retention period and, when that is switched on, expired records
+ * (Retention).
+ *
  * The logic lives in plain, unit-tested classes; this class only wires them
  * to the PBX.
  */
@@ -34,7 +38,12 @@ class WorkerStatusLookup extends WorkerBase
     /** Seconds a test call request may wait in the queue. */
     private const int TEST_CALL_MAX_AGE = 30;
 
+    /** The nightly clean-up runs at this hour, PBX time. */
+    private const int MAINTENANCE_HOUR = 3;
+
     private CallLogStore $store;
+
+    private int $nextMaintenance = 0;
 
     public function start(array $argv): void
     {
@@ -45,8 +54,32 @@ class WorkerStatusLookup extends WorkerBase
         $client->subscribe(StatusLookupConf::COMMANDS_TUBE, [$this, 'onCommand']);
         $client->subscribe($this->makePingTubeName(self::class), [$this, 'pingCallBack']);
 
+        // Not at once: the supervisor restarts workers in bursts, and a restart shouldn't wait for the clean-up.
+        $this->nextMaintenance = time() + 60;
         while ($this->needRestart === false) {
             $client->wait(1);
+            if (time() >= $this->nextMaintenance) {
+                $this->maintenance();
+            }
+        }
+    }
+
+    /** The nightly clean-up; the next one is scheduled whatever happens, so a failure isn't retried every second. */
+    private function maintenance(): void
+    {
+        $timezone = StatusLookupConf::timezone();
+        $next = (new \DateTimeImmutable('now', $timezone))->setTime(self::MAINTENANCE_HOUR, 0);
+        $this->nextMaintenance = ($next->getTimestamp() > time() ? $next : $next->modify('+1 day'))->getTimestamp();
+        try {
+            $db = Databases::openWritable(StatusLookupConf::moduleDbFile());
+            $settings = Settings::load($db);
+            $deleted = (new Retention($db, $timezone))->run(time(),
+                Retention::logDays((int)$settings['log_retention_days'], StatusLookupConf::cdrDays()), $settings['purge_expired'] === '1');
+            if ($deleted['calls'] > 0 || $deleted['records'] > 0) {
+                SystemMessages::sysLogMsg(static::class, "Clean-up: deleted {$deleted['calls']} old calls and {$deleted['records']} expired records", LOG_INFO);
+            }
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(static::class, 'Clean-up failed: ' . $e->getMessage(), LOG_ERR);
         }
     }
 

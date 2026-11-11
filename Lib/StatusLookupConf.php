@@ -100,10 +100,22 @@ class StatusLookupConf extends ConfigClass
         return PbxExtensionUtils::getModuleDir(self::MODULE_ID) . '/db/module.db';
     }
 
+    /** The key PINs are hashed with (Lib/Pin), next to the database. */
+    public static function pinKeyFile(): string
+    {
+        return dirname(self::moduleDbFile()) . '/pin.key';
+    }
+
     /**
      * The PBX's time zone, read afresh each time: long-running workers keep
      * the zone they started with.
      */
+    /** The PBX's call-history period in days (its "keep call recordings" setting); under 30 means for ever. */
+    public static function cdrDays(): int
+    {
+        return (int)PbxSettings::getValueByKey(PbxSettings::PBX_RECORD_SAVE_PERIOD);
+    }
+
     public static function timezone(): DateTimeZone
     {
         $name = (string)PbxSettings::getValueByKey(PbxSettings::PBX_TIMEZONE);

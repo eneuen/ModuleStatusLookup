@@ -25,7 +25,9 @@ use Modules\ModuleStatusLookup\Lib\Importer;
 use Modules\ModuleStatusLookup\Lib\IvrNumber;
 use Modules\ModuleStatusLookup\Lib\Lookup;
 use Modules\ModuleStatusLookup\Lib\PbxOptions;
+use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Lib\RecordEditor;
+use Modules\ModuleStatusLookup\Lib\Retention;
 use Modules\ModuleStatusLookup\Lib\Settings;
 use Modules\ModuleStatusLookup\Lib\StatusEditor;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
@@ -102,6 +104,8 @@ class ModuleStatusLookupController extends BaseController
                 'language'       => BuiltInPrompts::languageFor($language),
                 // Dates and times on the page are PBX time, as in the call records.
                 'timezone'       => StatusLookupConf::timezone()->getName(),
+                // The PBX's call-history period, which the call log follows by default (under 30: for ever).
+                'cdrDays'        => StatusLookupConf::cdrDays(),
             ];
         });
     }
@@ -256,6 +260,28 @@ class ModuleStatusLookupController extends BaseController
         $this->write(fn (): array => ['deleted' => $this->recordEditor($this->writableModuleDb())->delete($this->jsonPost('ids'))]);
     }
 
+    /** POST forgetId: id. Deletes its record and every call that typed it; the deletion is logged. */
+    public function forgetIdAction(): void
+    {
+        $this->write(function (): array {
+            $deleted = (new Retention($this->writableModuleDb(), StatusLookupConf::timezone()))->forgetId($this->request->getPost('id'));
+            $this->logForget('an ID', $deleted);
+
+            return $deleted;
+        });
+    }
+
+    /** POST forgetCaller: phone. Deletes its calls and removes it from records; the deletion is logged. */
+    public function forgetCallerAction(): void
+    {
+        $this->write(function (): array {
+            $deleted = (new Retention($this->writableModuleDb(), StatusLookupConf::timezone()))->forgetCaller($this->request->getPost('phone'));
+            $this->logForget('a caller number', $deleted);
+
+            return $deleted;
+        });
+    }
+
     /**
      * GET exportRecords: the filtered records as a CSV download, in the
      * import format. A plain page request (the browser downloads it), so no
@@ -393,7 +419,7 @@ class ModuleStatusLookupController extends BaseController
         $csv = (string)file_get_contents($file->getTempName());
         $statuses = $db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN);
 
-        return [new Importer($csv, Lookup::idLengths(Settings::load($db)), array_map('strval', $statuses)), (string)$file->getName()];
+        return [new Importer($csv, Lookup::idLengths(Settings::load($db)), array_map('strval', $statuses), $this->pin()), (string)$file->getName()];
     }
 
     private function activity(): Activity
@@ -408,7 +434,12 @@ class ModuleStatusLookupController extends BaseController
 
     private function recordEditor(PDO $db): RecordEditor
     {
-        return new RecordEditor($db, StatusLookupConf::timezone());
+        return new RecordEditor($db, StatusLookupConf::timezone(), $this->pin());
+    }
+
+    private function pin(): Pin
+    {
+        return Pin::fromFile(StatusLookupConf::pinKeyFile());
     }
 
     /** @return array<string, string> The record filters as plain strings; RecordEditor checks each one. */
@@ -421,6 +452,19 @@ class ModuleStatusLookupController extends BaseController
         }
 
         return $query;
+    }
+
+    /**
+     * Who forgot what, for the PBX's system log; without the ID or number
+     * itself, which was just forgotten. A warning, because the PBX logs
+     * only warnings and worse by default.
+     *
+     * @param array<string, int> $deleted
+     */
+    private function logForget(string $what, array $deleted): void
+    {
+        SystemMessages::sysLogMsg(self::class, sprintf('%s forgot %s (records deleted or changed: %d, calls deleted: %d)', $this->currentLogin() ?: 'an administrator', $what,
+            $deleted['records'], $deleted['calls']), LOG_WARNING);
     }
 
     /** The admin's login from the request's Bearer token (writes always carry one). */

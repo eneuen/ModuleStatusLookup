@@ -44,8 +44,8 @@ class StatusLookupCallLog extends ModulesModelsBase
     public $ended_at;
 
     /**
-     * The caller's number, digits only ('' when withheld). Cleared after
-     * the retention period.
+     * The caller's number, digits only ('' when withheld). The whole row
+     * is deleted after the retention period (Retention).
      *
      * @Column(type="string", nullable=true)
      */

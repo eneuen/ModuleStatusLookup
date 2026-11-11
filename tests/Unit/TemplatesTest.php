@@ -61,6 +61,15 @@ final class TemplatesTest extends TestCase
         self::assertSame(10, (int)$db->query('SELECT MAX(sort_order) FROM m_StatusLookupStatuses')->fetchColumn());
     }
 
+    public function testPharmacyAsksForPins(): void
+    {
+        $db = TestDatabases::module();
+        Settings::ensureRow($db);
+        (new Templates(self::DIR))->apply($db, 'pharmacy', 'en-en', '201');
+        self::assertSame(['1'], array_values(array_unique($db->query('SELECT requires_pin FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN))));
+        self::assertSame(['0'], array_values(array_unique($db->query('SELECT requires_callerid FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN))));
+    }
+
     public function testIdLengthsLeftAloneWhenRecordsExist(): void
     {
         $db = TestDatabases::module();

@@ -42,11 +42,12 @@ final class StatusEditor
     /**
      * Every status in order, with how many records have it.
      *
-     * @return list<array<string, int|string|null>>
+     * @return list<array<string, bool|int|string|null>>
      */
     public function list(): array
     {
         $rows = $this->db->query('SELECT s.id, s.code, s.name, s.script, s.prompt_id, s.spoken_extra, s.after_action, s.transfer_number,
+                s.requires_pin, s.requires_callerid,
                 s.sort_order, (SELECT COUNT(*) FROM m_StatusLookupRecords r WHERE r.status_code = s.code) AS records
             FROM m_StatusLookupStatuses s ORDER BY s.sort_order, s.id')->fetchAll(PDO::FETCH_ASSOC);
 
@@ -59,6 +60,8 @@ final class StatusEditor
             'spoken_extra'    => (string)$r['spoken_extra'],
             'after_action'    => (string)$r['after_action'],
             'transfer_number' => (string)$r['transfer_number'],
+            'requires_pin'    => (string)$r['requires_pin'] === '1',
+            'requires_callerid' => (string)$r['requires_callerid'] === '1',
             'records'         => (int)$r['records'],
         ], $rows);
     }
@@ -91,13 +94,13 @@ final class StatusEditor
                 }
                 $order = (int)$this->db->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM m_StatusLookupStatuses')->fetchColumn();
                 $this->db->prepare('INSERT INTO m_StatusLookupStatuses (code, name, script, prompt_id, spoken_extra, after_action, transfer_number,
-                        requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, \'0\', \'0\', ?)')
+                        requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                     ->execute([...array_values($values), $order]);
 
                 return (int)$this->db->lastInsertId();
             }
             $this->db->prepare('UPDATE m_StatusLookupStatuses SET code = ?, name = ?, script = ?, prompt_id = ?, spoken_extra = ?, after_action = ?,
-                    transfer_number = ? WHERE id = ?')->execute([...array_values($values), $id]);
+                    transfer_number = ?, requires_pin = ?, requires_callerid = ? WHERE id = ?')->execute([...array_values($values), $id]);
             if ($existing['code'] !== $values['code']) {
                 $this->db->prepare('UPDATE m_StatusLookupRecords SET status_code = ? WHERE status_code = ?')
                     ->execute([$values['code'], $existing['code']]);
@@ -178,7 +181,7 @@ final class StatusEditor
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{code: string, name: string, script: string, prompt_id: int, spoken_extra: string, after_action: string, transfer_number: string}
+     * @return array{code: string, name: string, script: string, prompt_id: int, spoken_extra: string, after_action: string, transfer_number: string, requires_pin: string, requires_callerid: string}
      *
      * @throws EditorException
      */
@@ -218,7 +221,9 @@ final class StatusEditor
         }
 
         return ['code' => $code, 'name' => $name, 'script' => $script, 'prompt_id' => $promptId, 'spoken_extra' => $extra,
-            'after_action' => $action, 'transfer_number' => $transfer];
+            'after_action' => $action, 'transfer_number' => $transfer,
+            'requires_pin' => filter_var($input['requires_pin'] ?? false, FILTER_VALIDATE_BOOLEAN) ? '1' : '0',
+            'requires_callerid' => filter_var($input['requires_callerid'] ?? false, FILTER_VALIDATE_BOOLEAN) ? '1' : '0'];
     }
 
     /** @return array{id: int, code: string}|null */

@@ -54,6 +54,7 @@ final class DialplanBuilder
     public const array PROMPTS = [
         'welcome'   => 'welcome_prompt_id',
         'enter_id'  => 'enter_id_prompt_id',
+        'enter_pin' => 'enter_pin_prompt_id',
         'invalid'   => 'invalid_prompt_id',
         'not_found' => 'not_found_prompt_id',
         'repeat'    => 'repeat_prompt_id',
@@ -273,7 +274,14 @@ final class DialplanBuilder
             'Set(SL_PROMPT=)',
             "AGI($agi,lookup)",
             "Verbose(3,SLPROBE event=lookup result=\${SL_RESULT} id=\${SL_ID} status=\${SL_STATUS} $c)",
-            'GotoIf($["${SL_RESULT}" == "hit"]?status)',
+            // A status that asks for the record's PIN: the script asks for it itself (Read() would write the digits
+            // into Asterisk's log) and looks up again with it.
+            'GotoIf($["${SL_RESULT}" != "need_pin"]?checked)',
+            'Set(SL_RESULT=fault)',
+            "AGI($agi,pin,{$p['enter_pin']},$this->timeout)",
+            "Verbose(3,SLPROBE event=pin result=\${SL_RESULT} id=\${SL_ID} status=\${SL_STATUS} $c)",
+            ['checked', 'GotoIf($["${SL_RESULT}" == "hit"]?status)'],
+            'GotoIf($["${SL_RESULT}" == "no_pin"]?operator)',
             'GotoIf($["${SL_RESULT}" == "rate_limited"]?rate_limited)',
             'GotoIf($["${SL_RESULT}" == "fault"]?fault)',
             // Misses are IDs that weren't found, which is what the miss limits count; an empty or

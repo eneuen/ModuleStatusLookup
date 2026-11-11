@@ -18,6 +18,10 @@ use PDO;
  * template applied is remembered, and sets the ID lengths when there are no
  * records yet.
  *
+ * A status may ask for the record's PIN ("pin": true) or only answer the
+ * record's own phone number ("callerid": true); the pharmacy template asks
+ * for PINs.
+ *
  * A template status that "goes to a person" puts the caller through to the
  * operator destination when one is set; otherwise it offers the repeat menu,
  * where 0 reaches the operator. Its sentence still has to be recorded and
@@ -74,7 +78,7 @@ final class Templates
         Databases::immediate($db, function () use ($db, $template, $key, $operator, $existing, &$added, &$kept): void {
             $order = (int)$db->query('SELECT COALESCE(MAX(sort_order), 0) FROM m_StatusLookupStatuses')->fetchColumn();
             $insert = $db->prepare("INSERT INTO m_StatusLookupStatuses (code, name, script, prompt_id, spoken_extra, after_action, transfer_number,
-                    requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, NULL, ?, ?, ?, '0', '0', ?)");
+                    requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)");
             foreach ($template['statuses'] as $status) {
                 if (isset($existing[$status['code']])) {
                     $kept[] = $status['code'];
@@ -86,7 +90,8 @@ final class Templates
                 $toPerson = $status['after'] === 'person';
                 $transfer = $toPerson && preg_match(Lookup::NUMBER_PATTERN, $operator) === 1;
                 $insert->execute([$status['code'], $status['name'], $status['script'], $status['extra'],
-                    $transfer ? 'transfer' : ($toPerson ? 'repeat' : $status['after']), $transfer ? $operator : '', ++$order]);
+                    $transfer ? 'transfer' : ($toPerson ? 'repeat' : $status['after']), $transfer ? $operator : '',
+                    $status['pin'] ? '1' : '0', $status['callerid'] ? '1' : '0', ++$order]);
                 $added[] = $status['code'];
             }
             $settings = Settings::load($db);
@@ -135,7 +140,8 @@ final class Templates
             if (!is_array($s) || !is_string($s['code'] ?? null) || preg_match(StatusEditor::CODE_PATTERN, $s['code']) !== 1
                 || isset($codes[$s['code']]) || !$text($s['name'] ?? null, StatusEditor::MAX_NAME)
                 || !$text($s['script'] ?? null, StatusEditor::MAX_SCRIPT)
-                || !in_array($s['extra'] ?? null, Lookup::EXTRAS, true) || !in_array($s['after'] ?? null, self::AFTER, true)) {
+                || !in_array($s['extra'] ?? null, Lookup::EXTRAS, true) || !in_array($s['after'] ?? null, self::AFTER, true)
+                || !is_bool($s['pin'] ?? false) || !is_bool($s['callerid'] ?? false)) {
                 return null;
             }
             $codes[$s['code']] = true;
@@ -162,7 +168,7 @@ final class Templates
             'id_length'   => $t['id_length'],
             'statuses'    => array_map(static fn (array $s): array => [
                 'code' => $s['code'], 'name' => $pick($s['name']), 'script' => $pick($s['script']),
-                'extra' => $s['extra'], 'after' => $s['after'],
+                'extra' => $s['extra'], 'after' => $s['after'], 'pin' => $s['pin'] ?? false, 'callerid' => $s['callerid'] ?? false,
             ], $t['statuses']),
         ];
     }

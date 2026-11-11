@@ -8,7 +8,7 @@ namespace Modules\ModuleStatusLookup\Lib;
 
 /**
  * Checks a change to the call flow (prompts, how callers type, where they
- * go, the miss limits and the on/off switch) before it is saved. The
+ * go, the miss limits, what is kept and the on/off switch) before it is saved. The
  * internal number is changed separately (the controller, which needs the
  * core), because other things in the PBX may point at it.
  *
@@ -27,6 +27,7 @@ final class CallFlowEditor
         'max_tries'         => [1, 9],
         'miss_limit_caller' => [0, 1000],
         'miss_limit_total'  => [0, 100000],
+        'log_retention_days' => [0, Retention::MAX_DAYS],
     ];
 
     public const array DESTINATIONS = ['operator_number', 'too_many_tries_number', 'fault_number'];
@@ -86,6 +87,9 @@ final class CallFlowEditor
         $merged = $out + $current;
         if ((int)$merged['id_min_length'] > (int)$merged['id_max_length']) {
             throw new EditorException('lengths');
+        }
+        if (array_key_exists('purge_expired', $input)) {
+            $out['purge_expired'] = filter_var($input['purge_expired'], FILTER_VALIDATE_BOOLEAN) ? '1' : '0';
         }
         if (array_key_exists('active', $input)) {
             $out['active'] = filter_var($input['active'], FILTER_VALIDATE_BOOLEAN) ? '1' : '0';

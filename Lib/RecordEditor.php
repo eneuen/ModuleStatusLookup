@@ -34,7 +34,10 @@ final class RecordEditor
 
     private const string DATE_PATTERN = '/^\d{4}-\d{2}-\d{2}\z/';
 
-    public function __construct(private readonly PDO $db, private readonly DateTimeZone $timezone)
+    /**
+     * @param Pin|null $pin Hashes new PINs; without it, a PIN can't be set.
+     */
+    public function __construct(private readonly PDO $db, private readonly DateTimeZone $timezone, private readonly ?Pin $pin = null)
     {
     }
 
@@ -54,7 +57,7 @@ final class RecordEditor
         $pages = max(1, (int)ceil($total / self::PAGE_SIZE));
         $page = min($pages, self::page($query['page'] ?? 1));
         $stmt = $this->db->prepare('SELECT r.id, r.lookup_id, r.status_code, r.note, r.status_date, r.expires_on, r.updated_at, r.updated_by,
-                r.source FROM m_StatusLookupRecords r ' . $where . ' ORDER BY r.updated_at DESC, r.id DESC LIMIT ' . self::PAGE_SIZE
+                r.source, r.phone, r.pin_hash != \'\' AS has_pin FROM m_StatusLookupRecords r ' . $where . ' ORDER BY r.updated_at DESC, r.id DESC LIMIT ' . self::PAGE_SIZE
             . ' OFFSET ' . (($page - 1) * self::PAGE_SIZE));
         $stmt->execute($params);
 
@@ -67,10 +70,11 @@ final class RecordEditor
      *
      * @param array<string, mixed> $input lookup_id, status_code, note, status_date, expires_on
      * @param array{int, int} $lengths The call flow's shortest and longest ID.
+     * @param string $source How the change came: form (the page) or api.
      *
      * @throws EditorException
      */
-    public function save(array $input, array $lengths, string $by, int $now): int
+    public function save(array $input, array $lengths, string $by, int $now, string $source = 'form'): int
     {
         $id = ($input['id'] ?? '') !== '' ? self::id($input['id']) : null;
         $lookupId = is_string($input['lookup_id'] ?? null) ? trim($input['lookup_id']) : '';
@@ -86,22 +90,32 @@ final class RecordEditor
         }
         $date = self::date($input['status_date'] ?? '', 'status_date');
         $expires = self::date($input['expires_on'] ?? '', 'expires_on');
+        $phone = self::phone($input['phone'] ?? '');
+        // A PIN is only ever written, as its hash: empty keeps the current one, remove_pin clears it.
+        $newPin = is_string($input['pin'] ?? null) ? trim($input['pin']) : '';
+        if ($newPin !== '' && (!Pin::isValid($newPin) || $this->pin === null)) {
+            throw new EditorException('pin');
+        }
+        $pinHash = $newPin !== '' ? $this->pin->hash($newPin) : null;
+        if ($pinHash === null && filter_var($input['remove_pin'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            $pinHash = '';
+        }
 
         $clash = $this->db->prepare('SELECT id FROM m_StatusLookupRecords WHERE lookup_id = ? AND id != ?');
         $clash->execute([$lookupId, $id ?? 0]);
         if ($clash->fetchColumn() !== false) {
             throw new EditorException('lookup_id_taken', ['id' => $lookupId]);
         }
-        $values = [$lookupId, $status, $note, $date, $expires, $now, self::by($by), 'form'];
+        $values = [$lookupId, $status, $note, $date, $expires, $phone, $now, self::by($by), $source === 'api' ? 'api' : 'form'];
         if ($id === null) {
-            $this->db->prepare('INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, status_date, expires_on, updated_at,
-                    updated_by, source, pin_hash, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'\', \'\')')->execute($values);
+            $this->db->prepare('INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, status_date, expires_on, phone, updated_at,
+                    updated_by, source, pin_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([...$values, $pinHash ?? '']);
 
             return (int)$this->db->lastInsertId();
         }
         $stmt = $this->db->prepare('UPDATE m_StatusLookupRecords SET lookup_id = ?, status_code = ?, note = ?, status_date = ?, expires_on = ?,
-                updated_at = ?, updated_by = ?, source = ? WHERE id = ?');
-        $stmt->execute([...$values, $id]);
+                phone = ?, updated_at = ?, updated_by = ?, source = ?, pin_hash = COALESCE(?, pin_hash) WHERE id = ?');
+        $stmt->execute([...$values, $pinHash, $id]);
         if ($stmt->rowCount() === 0) {
             throw new EditorException('record_gone');
         }
@@ -151,8 +165,9 @@ final class RecordEditor
 
     /**
      * The filtered records as CSV, in the import format (lookup_id,
-     * status_code, note, pin, expires, date), so an export can be edited in a
-     * spreadsheet and imported again. PINs are never exported. A cell that a
+     * status_code, note, pin, expires, date, phone), so an export can be
+     * edited in a spreadsheet and imported again. PINs are never exported
+     * (the column stays empty, which the import reads as "keep the PIN"). A cell that a
      * spreadsheet would read as a formula gets a leading apostrophe.
      *
      * @param array<string, mixed> $query
@@ -161,12 +176,12 @@ final class RecordEditor
     public function export(array $query, int $now, callable $write): void
     {
         [$where, $params] = $this->filter($query, $now);
-        $stmt = $this->db->prepare("SELECT r.lookup_id, r.status_code, r.note, r.expires_on, r.status_date FROM m_StatusLookupRecords r $where
+        $stmt = $this->db->prepare("SELECT r.lookup_id, r.status_code, r.note, r.expires_on, r.status_date, r.phone FROM m_StatusLookupRecords r $where
             ORDER BY r.lookup_id");
         $stmt->execute($params);
-        $write(self::csvLine(['lookup_id', 'status_code', 'note', 'pin', 'expires', 'date']));
+        $write(self::csvLine(['lookup_id', 'status_code', 'note', 'pin', 'expires', 'date', 'phone']));
         while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
-            $write(self::csvLine([$row['lookup_id'], $row['status_code'], $row['note'], '', $row['expires_on'], $row['status_date']]));
+            $write(self::csvLine([$row['lookup_id'], $row['status_code'], $row['note'], '', $row['expires_on'], $row['status_date'], $row['phone']]));
         }
     }
 
@@ -246,6 +261,9 @@ final class RecordEditor
             'updated_at'  => $r['updated_at'] === null ? null : (int)$r['updated_at'],
             'updated_by'  => (string)$r['updated_by'],
             'source'      => (string)$r['source'],
+            'phone'       => (string)$r['phone'],
+            // Whether a PIN is set; the PIN itself is never stored or sent.
+            'has_pin'     => (int)$r['has_pin'] === 1,
         ];
     }
 
@@ -320,6 +338,20 @@ final class RecordEditor
         }
 
         return $text;
+    }
+
+    /** A phone number as stored: digits only (a leading + and separators are dropped), up to 20, or ''. */
+    public static function phone(mixed $value): string
+    {
+        $text = is_string($value) ? trim($value) : '';
+        if ($text === '') {
+            return '';
+        }
+        if (preg_match('/^\+?[0-9 ()\-.]{1,40}\z/', $text) !== 1 || strlen($digits = (string)preg_replace('/\D+/', '', $text)) > 20) {
+            throw new EditorException('phone');
+        }
+
+        return $digits;
     }
 
     /** Who made a change, as stored: an admin login or an API key's name, at most 64 characters, no control characters. */

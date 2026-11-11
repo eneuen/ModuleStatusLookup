@@ -8,6 +8,7 @@ namespace Modules\ModuleStatusLookup\Tests\Unit;
 
 use DateTimeZone;
 use Modules\ModuleStatusLookup\Lib\Lookup;
+use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Lib\Settings;
 use Modules\ModuleStatusLookup\Tests\Unit\Support\TestDatabases;
 use PDO;
@@ -30,6 +31,8 @@ final class LookupTest extends TestCase
         $status->execute(['SHIPPED', 'Shipped', 12, 'date', 'hangup', '']);
         $status->execute(['NEEDS_APPROVAL', 'Needs approval', 13, 'none', 'transfer', '2001']);
         $status->execute(['NO_PROMPT', 'Gone prompt', 99, 'none', 'repeat', '']);
+        $this->db->exec("INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, requires_pin, requires_callerid)
+            VALUES ('PINNED', 'Pinned', 11, 'none', 'repeat', '1', '0'), ('MINE', 'Mine', 11, 'none', 'repeat', '0', '1')");
         $record = $this->db->prepare('INSERT INTO m_StatusLookupRecords (lookup_id, status_code, status_date, expires_on) VALUES (?, ?, ?, ?)');
         $record->execute(['10445', 'READY', '', '']);
         $record->execute(['00451', 'SHIPPED', '2026-11-12', '']);
@@ -38,6 +41,10 @@ final class LookupTest extends TestCase
         $record->execute(['30001', 'NO_PROMPT', '', '']);
         $record->execute(['30002', 'UNKNOWN', '', '']);
         $record->execute(['30003', 'SHIPPED', 'not a date', '']);
+        $this->db->prepare("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, pin_hash, phone) VALUES (?, ?, ?, ?)")
+            ->execute(['40001', 'PINNED', (new Pin(str_repeat('k', 64)))->hash('4821'), '']);
+        $this->db->exec("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, pin_hash, phone) VALUES
+            ('40002', 'PINNED', '', ''), ('40003', 'MINE', '', '+49 30 1234567')");
         $record->execute(['30004', 'READY', '', '2099-1-1']);
     }
 
@@ -46,7 +53,7 @@ final class LookupTest extends TestCase
         $prompts = [11 => '/storage/media/ready', 12 => '/storage/media/shipped', 13 => '/storage/media/approval'];
 
         return new Lookup($this->db, $settings + Settings::DEFAULTS, new DateTimeZone('Europe/Berlin'),
-            static fn (int $id): ?string => $prompts[$id] ?? null);
+            static fn (int $id): ?string => $prompts[$id] ?? null, new Pin(str_repeat('k', 64)));
     }
 
     public function testHitWithRepeatMenuAndSpokenId(): void
@@ -190,6 +197,41 @@ final class LookupTest extends TestCase
         $this->logMisses('5551234', 50, self::NOW - 60);
         self::assertSame('hit', $this->lookup(['miss_limit_caller' => 0, 'miss_limit_total' => 0])
             ->find('10445', '5551234', 0, self::NOW)['SL_RESULT']);
+    }
+
+    public function testPinIsAskedForAndNothingIsSaidBeforeItMatches(): void
+    {
+        $asked = $this->lookup()->find('40001', '', 0, self::NOW);
+        self::assertSame('need_pin', $asked['SL_RESULT']);
+        self::assertSame(['', ''], [$asked['SL_STATUS'], $asked['SL_PROMPT']]);
+
+        self::assertSame('pin_failed', $this->lookup()->find('40001', '', 0, self::NOW, '0000')['SL_RESULT']);
+        self::assertSame('pin_failed', $this->lookup()->find('40001', '', 0, self::NOW, '')['SL_RESULT']);
+        $hit = $this->lookup()->find('40001', '', 0, self::NOW, '4821');
+        self::assertSame(['hit', 'PINNED'], [$hit['SL_RESULT'], $hit['SL_STATUS']]);
+    }
+
+    public function testStatusAskingForAPinWithoutOneStoredPutsTheCallerThrough(): void
+    {
+        self::assertSame('no_pin', $this->lookup()->find('40002', '', 0, self::NOW)['SL_RESULT']);
+        // Without a key, no PIN can be checked: the same.
+        $noKey = new Lookup($this->db, Settings::DEFAULTS, new DateTimeZone('UTC'), static fn (int $id): ?string => '/x/y');
+        self::assertSame('no_pin', $noKey->find('40001', '', 0, self::NOW, '4821')['SL_RESULT']);
+    }
+
+    public function testCallerNumberMustBeTheRecordsPhone(): void
+    {
+        self::assertSame('hit', $this->lookup()->find('40003', '0301234567', 0, self::NOW)['SL_RESULT']);
+        self::assertSame('hit', $this->lookup()->find('40003', '49301234567', 0, self::NOW)['SL_RESULT']);
+        self::assertSame('callerid_failed', $this->lookup()->find('40003', '0301234568', 0, self::NOW)['SL_RESULT']);
+        self::assertSame('callerid_failed', $this->lookup()->find('40003', '', 0, self::NOW)['SL_RESULT']);
+    }
+
+    public function testSamePhone(): void
+    {
+        self::assertTrue(Lookup::samePhone('+49 30 1234567', '030 1234567'));
+        self::assertFalse(Lookup::samePhone('123456', '123456'));       // too short to tell
+        self::assertFalse(Lookup::samePhone('5551234', ''));
     }
 
     public function testDigits(): void

@@ -38,20 +38,29 @@ PROMPT = 2            # a PBX sound file every MikoPBX has (the default greeting
 LINE_RE = re.compile(r"SLPROBE event=(\S+)(.*)$")
 PAIR_RE = re.compile(r"(\w+)=(\S*)")
 
+PIN = "4821"
+OTHER_PHONE = "4915112345678"
+
 STATUSES = [
-    # code, prompt, spoken extra, after-action, transfer number
-    ("READY", PROMPT, "id", "repeat", ""),
-    ("SHIPPED", PROMPT, "date", "hangup", ""),
-    ("NEEDS_APPROVAL", PROMPT, "none", "transfer", APPROVAL),
-    ("GONE_TARGET", PROMPT, "none", "transfer", "2999"),
+    # code, prompt, spoken extra, after-action, transfer number, asks for the PIN, own phone only
+    ("READY", PROMPT, "id", "repeat", "", 0, 0),
+    ("SHIPPED", PROMPT, "date", "hangup", "", 0, 0),
+    ("NEEDS_APPROVAL", PROMPT, "none", "transfer", APPROVAL, 0, 0),
+    ("GONE_TARGET", PROMPT, "none", "transfer", "2999", 0, 0),
+    ("PRIVATE", PROMPT, "none", "hangup", "", 1, 0),
+    ("MINE", PROMPT, "none", "hangup", "", 0, 1),
 ]
 RECORDS = [
-    # lookup ID, status, date, last day
-    ("10445", "READY", "", ""),
-    ("00451", "SHIPPED", "2026-11-12", ""),
-    ("20001", "NEEDS_APPROVAL", "", ""),
-    ("20002", "GONE_TARGET", "", ""),
-    ("30001", "READY", "", "2020-01-01"),
+    # lookup ID, status, date, last day, phone, PIN
+    ("10445", "READY", "", "", "", ""),
+    ("00451", "SHIPPED", "2026-11-12", "", "", ""),
+    ("20001", "NEEDS_APPROVAL", "", "", "", ""),
+    ("20002", "GONE_TARGET", "", "", "", ""),
+    ("30001", "READY", "", "2020-01-01", "", ""),
+    ("40001", "PRIVATE", "", "", "", PIN),
+    ("40002", "PRIVATE", "", "", "", ""),
+    ("40003", "MINE", "", "", callsim.CALLER, ""),
+    ("40004", "MINE", "", "", OTHER_PHONE, ""),
 ]
 SETTINGS = {
     "active": "1", "operator_number": OPERATOR, "too_many_tries_number": TOO_MANY, "fault_number": FAULT,
@@ -73,6 +82,13 @@ def rows(statement):
 
 def quote(value):
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def pin_hash(pin):
+    """The PIN's hash, made with the PBX's own key (as the page and imports store it)."""
+    return docker("exec", PBX_CONTAINER, "php", "-r",
+                  "require_once 'Globals.php'; echo Modules\\ModuleStatusLookup\\Lib\\Pin::fromFile("
+                  "Modules\\ModuleStatusLookup\\Lib\\StatusLookupConf::pinKeyFile())->hash('" + pin + "');", capture=True).strip()
 
 
 def reload_dialplan():
@@ -103,12 +119,15 @@ class Probe:
         assignments = ", ".join(f"{k} = {quote(v)}" for k, v in settings.items())
         statements = [f"UPDATE m_StatusLookupSettings SET {assignments} WHERE id = 1",
                       "DELETE FROM m_StatusLookupStatuses", "DELETE FROM m_StatusLookupRecords"]
-        for code, prompt, extra, action, transfer in STATUSES:
-            statements.append("INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, transfer_number) "
-                              f"VALUES ({quote(code)}, {quote(code)}, {prompt}, {quote(extra)}, {quote(action)}, {quote(transfer)})")
-        for lookup_id, status, date, expires in RECORDS:
-            statements.append("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, status_date, expires_on, updated_at, source) "
-                              f"VALUES ({quote(lookup_id)}, {quote(status)}, {quote(date)}, {quote(expires)}, strftime('%s','now'), 'form')")
+        for code, prompt, extra, action, transfer, pin, own in STATUSES:
+            statements.append("INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, transfer_number, "
+                              f"requires_pin, requires_callerid) VALUES ({quote(code)}, {quote(code)}, {prompt}, {quote(extra)}, {quote(action)}, "
+                              f"{quote(transfer)}, {quote(pin)}, {quote(own)})")
+        hashes = {pin: pin_hash(pin) for *_, pin in RECORDS if pin}
+        for lookup_id, status, date, expires, phone, pin in RECORDS:
+            statements.append("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, status_date, expires_on, phone, pin_hash, updated_at, source) "
+                              f"VALUES ({quote(lookup_id)}, {quote(status)}, {quote(date)}, {quote(expires)}, {quote(phone)}, "
+                              f"{quote(hashes.get(pin, ''))}, strftime('%s','now'), 'form')")
         sql("; ".join(statements))
         reload_dialplan()
         if settings["active"] != "1":
@@ -511,6 +530,70 @@ def time_limit(p, c):
         check_row(c, p, log_id, outcome="too_many", target=TOO_MANY, misses=0)
     finally:
         p.configure()
+
+
+@scenario("A status that asks for the PIN: the right PIN plays the status; the PIN never reaches Asterisk's log.")
+def pin_right(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller = call_in(p)
+    enter(since, caller, "40001#")
+    c.that(wait_event(since, "lookup", timeout=15, result="need_pin", id="40001") is not None, "the lookup asks for the PIN")
+    pause(2)
+    caller.keys(PIN + "#")
+    hit = wait_event(since, "pin", timeout=15, result="hit")
+    c.that(hit and hit.get("status") == "PRIVATE", f"right PIN: status PRIVATE ({hit})")
+    c.that(wait_event(since, "goodbye", timeout=30) is not None, "goodbye (hang-up after-action)")
+    logged = docker("exec", PBX_CONTAINER, "sh", "-c", f"tail -c +{since + 1} {VERBOSE_LOG} | grep -c {PIN} || true", capture=True)
+    c.that(logged.strip() == "0", "the PIN isn't in Asterisk's log")
+    check_row(c, p, log_id, outcome="hit", status_code="PRIVATE", last_result="hit", id_entered="40001")
+
+
+@scenario("A wrong PIN: heard as not found, counted as a miss, and the caller can try again with another ID.")
+def pin_wrong(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller = call_in(p)
+    enter(since, caller, "40001#")
+    c.that(wait_event(since, "lookup", timeout=15, result="need_pin") is not None, "the lookup asks for the PIN")
+    pause(2)
+    caller.keys("1111#")
+    c.that(wait_event(since, "pin", timeout=15, result="pin_failed") is not None, "wrong PIN: pin_failed")
+    pause(4)
+    caller.keys("10445#")
+    c.that(wait_event(since, "lookup", timeout=15, result="hit", id="10445") is not None, "the next try works")
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="hit", status_code="READY", tries=2, misses=1)
+
+
+@scenario("A status that asks for a PIN, on a record without one: the caller is put through to the operator.")
+def no_pin_stored(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller, op = call_in(p), Line(OPERATOR)
+    enter(since, caller, "40002#")
+    c.that(wait_event(since, "lookup", timeout=15, result="no_pin") is not None, "lookup result: no_pin")
+    c.that(rang(op, 15), "the operator rings")
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="operator", last_result="no_pin", target=OPERATOR, misses=0)
+
+
+@scenario("A status only for the record's own phone, called from that phone: the status plays.")
+def callerid_match(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller = call_in(p)
+    enter(since, caller, "40003#")
+    c.that(wait_event(since, "lookup", timeout=15, result="hit", status="MINE") is not None, "lookup hit MINE")
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="hit", status_code="MINE")
+
+
+@scenario("A status only for the record's own phone, called from another number: heard as not found.")
+def callerid_mismatch(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller = call_in(p)
+    enter(since, caller, "40004#")
+    c.that(wait_event(since, "lookup", timeout=15, result="callerid_failed") is not None, "lookup result: callerid_failed")
+    pause(2)
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="abandoned", last_result="callerid_failed", misses=1)
 
 
 # --------------------------------------------------------------------------- running

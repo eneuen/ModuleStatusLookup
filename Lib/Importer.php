@@ -14,7 +14,10 @@ use PDO;
  *
  * The file: UTF-8 (a byte-order mark is fine), comma- or semicolon-separated,
  * with a header row. lookup_id and status_code are required; note, pin,
- * expires and date are optional, in any order. Export CSV writes the same
+ * expires, date and phone are optional, in any order. A PIN (4 to 8 digits)
+ * is stored only as its hash; an empty PIN cell keeps the record's PIN. A
+ * phone column sets the phone (empty clears it); without the column, phones
+ * stay as they are. Export CSV writes the same
  * format.
  *
  * Each row is checked on its own and rejected with its row number (the
@@ -22,9 +25,7 @@ use PDO;
  * silently changed: an ID with other characters than digits
  * keeps only its digits (as typed on a keypad), and must then fit the call
  * flow's ID lengths; status codes are matched without regard to case; a
- * second row with the same ID is rejected. Dates are YYYY-MM-DD. PINs are
- * not supported yet, so a row with one is rejected rather than stored
- * without it.
+ * second row with the same ID is rejected. Dates are YYYY-MM-DD.
  *
  * Modes: update adds new IDs and changes existing ones; replace also deletes
  * every record the file doesn't have, except those whose row was left out. Applying writes everything in one
@@ -50,11 +51,12 @@ final class Importer
         'status_code' => 'status_code', 'status' => 'status_code',
         'note' => 'note',
         'pin' => 'pin',
+        'phone' => 'phone',
         'expires' => 'expires_on', 'expires_on' => 'expires_on',
         'date' => 'status_date', 'status_date' => 'status_date',
     ];
 
-    /** @var array<string, array{lookup_id: string, status_code: string, note: string, expires_on: string, status_date: string}> */
+    /** @var array<string, array{lookup_id: string, status_code: string, note: string, expires_on: string, status_date: string, phone: ?string, pin_hash: ?string}> */
     private array $rows = [];
 
     /** @var list<array{row: int, reason: string, id: string}> */
@@ -71,10 +73,11 @@ final class Importer
      *
      * @param array{int, int} $lengths The call flow's shortest and longest ID.
      * @param list<string> $statusCodes The statuses that exist.
+     * @param Pin|null $pin Hashes PINs in the file; without it, a row with a PIN is left out.
      *
      * @throws EditorException
      */
-    public function __construct(string $csv, array $lengths, array $statusCodes)
+    public function __construct(string $csv, array $lengths, array $statusCodes, private readonly ?Pin $pin = null)
     {
         if (strlen($csv) > self::MAX_BYTES) {
             throw new EditorException('file_size', ['max' => self::MAX_BYTES / 1024 / 1024]);
@@ -122,7 +125,8 @@ final class Importer
                 isset($seen[$id]) => 'duplicate',
                 !isset($statuses[strtoupper($row['status_code'] ?? '')]) => 'status',
                 mb_strlen($row['note'] ?? '') > RecordEditor::MAX_NOTE => 'note',
-                ($row['pin'] ?? '') !== '' => 'pin',
+                ($row['pin'] ?? '') !== '' && (!Pin::isValid($row['pin']) || $this->pin === null) => 'pin',
+                !self::isPhone($row['phone'] ?? '') => 'phone',
                 !self::isDate($row['expires_on'] ?? '') => 'expires',
                 !self::isDate($row['status_date'] ?? '') => 'date',
                 default => null,
@@ -141,6 +145,9 @@ final class Importer
                 'note'        => self::note($row['note'] ?? ''),
                 'expires_on'  => $row['expires_on'] ?? '',
                 'status_date' => $row['status_date'] ?? '',
+                // Only changed when the file has a phone column; a PIN only when the cell has one.
+                'phone'       => array_key_exists('phone', $row) ? RecordEditor::phone($row['phone']) : null,
+                'pin_hash'    => ($row['pin'] ?? '') !== '' ? $this->pin?->hash($row['pin']) : null,
             ];
         }
         fclose($stream);
@@ -166,8 +173,9 @@ final class Importer
      *
      * @return array{added: int, updated: int, unchanged: int, deleted: int, kept: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}
      */
-    public function apply(PDO $db, string $mode, string $by, string $fileName, int $now): array
+    public function apply(PDO $db, string $mode, string $by, string $fileName, int $now, string $source = 'csv'): array
     {
+        $source = $source === 'api' ? 'api' : 'csv';
         self::requireMode($mode);
         if ($mode === 'replace' && $this->rows === []) {
             throw new EditorException('replace_empty');
@@ -175,18 +183,19 @@ final class Importer
         $by = mb_substr(trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $by)), 0, 64);
         $fileName = mb_substr(trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $fileName)), 0, 120);
 
-        return Databases::immediate($db, function () use ($db, $mode, $by, $fileName, $now): array {
+        return Databases::immediate($db, function () use ($db, $mode, $by, $fileName, $now, $source): array {
             $existing = $this->existing($db);
             $plan = $this->plan($existing, $mode);
-            $insert = $db->prepare("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, expires_on, status_date, updated_at, updated_by,
-                    source, pin_hash, phone) VALUES (?, ?, ?, ?, ?, ?, ?, 'csv', '', '')");
-            $update = $db->prepare("UPDATE m_StatusLookupRecords SET status_code = ?, note = ?, expires_on = ?, status_date = ?, updated_at = ?,
-                    updated_by = ?, source = 'csv' WHERE lookup_id = ?");
+            $insert = $db->prepare("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, expires_on, status_date, phone, pin_hash,
+                    updated_at, updated_by, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $update = $db->prepare("UPDATE m_StatusLookupRecords SET status_code = ?, note = ?, expires_on = ?, status_date = ?,
+                    phone = COALESCE(?, phone), pin_hash = COALESCE(?, pin_hash), updated_at = ?, updated_by = ?, source = ? WHERE lookup_id = ?");
             foreach ($this->rows as $id => $row) {
+                $values = [$row['status_code'], $row['note'], $row['expires_on'], $row['status_date']];
                 if (!isset($existing[$id])) {
-                    $insert->execute([(string)$id, $row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by]);
-                } elseif ($existing[$id] !== self::fingerprint($row)) {
-                    $update->execute([$row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by, (string)$id]);
+                    $insert->execute([(string)$id, ...$values, $row['phone'] ?? '', $row['pin_hash'] ?? '', $now, $by, $source]);
+                } elseif (self::changes($row, $existing[$id])) {
+                    $update->execute([...$values, $row['phone'], $row['pin_hash'], $now, $by, $source, (string)$id]);
                 }
             }
             $delete = $db->prepare('DELETE FROM m_StatusLookupRecords WHERE lookup_id = ?');
@@ -208,7 +217,7 @@ final class Importer
      * doesn't have, except those whose row was left out: a typo in one row
      * must not delete that customer's record. Those are counted as kept.
      *
-     * @param array<string, string> $existing
+     * @param array<string, array<string, string>> $existing
      *
      * @return array{result: array{added: int, updated: int, unchanged: int, deleted: int, kept: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}, delete: list<string>}
      */
@@ -216,7 +225,7 @@ final class Importer
     {
         $counts = ['added' => 0, 'updated' => 0, 'unchanged' => 0];
         foreach ($this->rows as $id => $row) {
-            $counts[!isset($existing[$id]) ? 'added' : ($existing[$id] === self::fingerprint($row) ? 'unchanged' : 'updated')]++;
+            $counts[!isset($existing[$id]) ? 'added' : (self::changes($row, $existing[$id]) ? 'updated' : 'unchanged')]++;
         }
         $delete = [];
         $kept = 0;
@@ -285,22 +294,46 @@ final class Importer
         }
     }
 
-    /** @return array<string, string> Lookup ID => fingerprint of what the import can change. */
+    /** @return array<string, array<string, string>> Lookup ID => what the import can change. */
     private function existing(PDO $db): array
     {
         $out = [];
-        foreach ($db->query('SELECT lookup_id, status_code, note, expires_on, status_date FROM m_StatusLookupRecords')->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $out[(string)$r['lookup_id']] = self::fingerprint($r);
+        foreach ($db->query('SELECT lookup_id, status_code, note, expires_on, status_date, phone, pin_hash FROM m_StatusLookupRecords')
+            ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(string)$r['lookup_id']] = array_map('strval', $r);
         }
 
         return $out;
     }
 
-    /** @param array<string, mixed> $row */
-    private static function fingerprint(array $row): string
+    /**
+     * Whether a row would change its record. The phone counts only when the
+     * file has the column, the PIN only when the cell has one (the same PIN
+     * gives the same hash, so it doesn't count as a change).
+     *
+     * @param array<string, string|null> $row
+     * @param array<string, string> $old
+     */
+    private static function changes(array $row, array $old): bool
     {
-        return json_encode([(string)$row['status_code'], (string)$row['note'], (string)$row['expires_on'], (string)$row['status_date']],
-            JSON_THROW_ON_ERROR);
+        foreach (['status_code', 'note', 'expires_on', 'status_date', 'phone', 'pin_hash'] as $field) {
+            if ($row[$field] !== null && $row[$field] !== $old[$field]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function isPhone(string $text): bool
+    {
+        try {
+            RecordEditor::phone($text);
+
+            return true;
+        } catch (EditorException) {
+            return false;
+        }
     }
 
     /**

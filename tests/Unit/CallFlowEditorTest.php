@@ -30,10 +30,11 @@ final class CallFlowEditorTest extends TestCase
         $out = self::editor()->change([
             'welcome_prompt_id' => '0', 'enter_id_prompt_id' => '5', 'max_tries' => '4', 'digit_timeout' => 7,
             'operator_number' => ' 201 ', 'too_many_tries_number' => '', 'unknown' => 'x',
+            'log_retention_days' => '90', 'purge_expired' => 'true',
         ], self::current());
 
         self::assertSame(['welcome_prompt_id' => 0, 'enter_id_prompt_id' => 5, 'digit_timeout' => 7, 'max_tries' => 4,
-            'operator_number' => '201', 'too_many_tries_number' => ''], $out);
+            'log_retention_days' => 90, 'operator_number' => '201', 'too_many_tries_number' => '', 'purge_expired' => '1'], $out);
     }
 
     /** @return iterable<string, array{array<string, mixed>, string}> */
@@ -42,6 +43,7 @@ final class CallFlowEditorTest extends TestCase
         yield 'unplayable prompt' => [['enter_id_prompt_id' => '6'], 'prompt'];
         yield 'only the welcome may be none' => [['goodbye_prompt_id' => '0'], 'prompt'];
         yield 'tries too high' => [['max_tries' => '10'], 'range'];
+        yield 'retention too long' => [['log_retention_days' => '3651'], 'range'];
         yield 'ID too short' => [['id_min_length' => '1'], 'range'];
         yield 'not a number' => [['digit_timeout' => '5s'], 'whole_number'];
         yield 'array' => [['digit_timeout' => ['5']], 'whole_number'];

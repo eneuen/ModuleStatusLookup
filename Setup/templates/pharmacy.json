@@ -2,18 +2,18 @@
   "key": "pharmacy",
   "order": 3,
   "name": { "en": "Pharmacy", "ru": "Аптека" },
-  "description": { "en": "Callers enter their prescription number. No medicine is ever named.", "ru": "Звонящий вводит номер рецепта. Названия лекарств никогда не произносятся." },
+  "description": { "en": "Callers enter their prescription number, then its PIN. No medicine is ever named.", "ru": "Звонящий вводит номер рецепта, затем его PIN-код. Названия лекарств никогда не произносятся." },
   "id_length": [6, 7],
   "statuses": [
-    { "code": "RECEIVED", "name": { "en": "Received", "ru": "Получен" }, "extra": "none", "after": "repeat",
+    { "code": "RECEIVED", "name": { "en": "Received", "ru": "Получен" }, "extra": "none", "pin": true, "after": "repeat",
       "script": { "en": "We have received your prescription.", "ru": "Мы получили ваш рецепт." } },
-    { "code": "FILLING", "name": { "en": "Being prepared", "ru": "Готовится" }, "extra": "none", "after": "repeat",
+    { "code": "FILLING", "name": { "en": "Being prepared", "ru": "Готовится" }, "extra": "none", "pin": true, "after": "repeat",
       "script": { "en": "Your prescription is being prepared.", "ru": "Ваш заказ по рецепту готовится." } },
-    { "code": "READY", "name": { "en": "Ready for collection", "ru": "Готов к выдаче" }, "extra": "none", "after": "repeat",
+    { "code": "READY", "name": { "en": "Ready for collection", "ru": "Готов к выдаче" }, "extra": "none", "pin": true, "after": "repeat",
       "script": { "en": "Your prescription is ready for collection.", "ru": "Ваш заказ по рецепту готов, его можно забрать." } },
-    { "code": "WAITING_DOCTOR", "name": { "en": "Waiting for the doctor", "ru": "Ожидаем врача" }, "extra": "none", "after": "repeat",
+    { "code": "WAITING_DOCTOR", "name": { "en": "Waiting for the doctor", "ru": "Ожидаем врача" }, "extra": "none", "pin": true, "after": "repeat",
       "script": { "en": "We are waiting for your doctor.", "ru": "Мы ожидаем ответа вашего врача." } },
-    { "code": "OUT_OF_STOCK", "name": { "en": "Please speak to us", "ru": "Нужно поговорить" }, "extra": "none", "after": "person",
+    { "code": "OUT_OF_STOCK", "name": { "en": "Please speak to us", "ru": "Нужно поговорить" }, "extra": "none", "pin": true, "after": "person",
       "script": { "en": "Please speak to us about your prescription.", "ru": "Пожалуйста, обсудите рецепт с нашим сотрудником." } }
   ]
 }

@@ -13,7 +13,9 @@ use MikoPBX\Modules\Setup\PbxExtensionSetupBase;
 use Modules\ModuleStatusLookup\Lib\CoreNumber;
 use Modules\ModuleStatusLookup\Lib\Databases;
 use Modules\ModuleStatusLookup\Lib\IvrNumber;
+use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Lib\Settings;
+use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
 use Throwable;
 
 /**
@@ -47,6 +49,22 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
      * number up to 2399; a kept database keeps its number. If no number can be had, the install still
      * succeeds and the admin chooses one on the module page.
      */
+    /**
+     * The core makes every module file world-readable (0644) here; the PIN
+     * key goes back to owner-only straight away.
+     */
+    public function fixFilesRights(): bool
+    {
+        $result = parent::fixFilesRights();
+        try {
+            Pin::fromFile(StatusLookupConf::pinKeyFile());
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(__CLASS__, 'PIN key: ' . $e->getMessage(), LOG_WARNING);
+        }
+
+        return $result;
+    }
+
     public function installDB(): bool
     {
         if (!parent::installDB()) {
