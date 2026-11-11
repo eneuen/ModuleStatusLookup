@@ -7,6 +7,7 @@ declare(strict_types=1);
 namespace Modules\ModuleStatusLookup\Models;
 
 use MikoPBX\Common\Models\Extensions;
+use MikoPBX\Common\Models\SoundFiles;
 use MikoPBX\Modules\Models\ModulesModelsBase;
 use Phalcon\Mvc\Model\Relation;
 
@@ -152,35 +153,47 @@ class StatusLookupSettings extends ModulesModelsBase
     /**
      * Claims the IVR's number in the core's extensions table, so the core
      * lists it in its destination pickers as this module's ("Module: ..."),
-     * and protects the destinations the IVR sends callers to: the core then
-     * refuses to delete a queue, IVR menu or extension the IVR still uses.
+     * and protects what the IVR uses: the core then refuses to delete a
+     * queue, IVR menu or extension it sends callers to, or a sound file it
+     * plays.
      * The core attaches these relations only while the module is enabled.
      */
     public static function getDynamicRelations(&$calledModelObject): void
     {
-        if (!$calledModelObject instanceof Extensions) {
-            return;
+        if ($calledModelObject instanceof Extensions) {
+            $fields = [
+                'internal_number'       => '',
+                'operator_number'       => 'Operator',
+                'too_many_tries_number' => 'TooManyTries',
+                'fault_number'          => 'Fault',
+            ];
+            self::restrict($calledModelObject, 'number', $fields);
         }
-        $fields = [
-            'internal_number'       => '',
-            'operator_number'       => 'Operator',
-            'too_many_tries_number' => 'TooManyTries',
-            'fault_number'          => 'Fault',
-        ];
+        if ($calledModelObject instanceof SoundFiles) {
+            // Built-in prompts are negative IDs and never match a sound file.
+            $fields = [];
+            foreach (['welcome', 'enter_id', 'enter_pin', 'invalid', 'not_found', 'repeat', 'goodbye', 'transfer', 'fault'] as $prompt) {
+                $fields["{$prompt}_prompt_id"] = 'Prompt' . str_replace('_', '', ucwords($prompt, '_'));
+            }
+            self::restrict($calledModelObject, 'id', $fields);
+        }
+    }
+
+    /**
+     * @param Extensions|SoundFiles $model
+     * @param array<string, string> $fields This model's field => alias suffix.
+     */
+    private static function restrict($model, string $key, array $fields): void
+    {
         foreach ($fields as $field => $suffix) {
-            $calledModelObject->hasMany(
-                'number',
-                self::class,
-                $field,
-                [
-                    'alias'      => "ModuleStatusLookupSettings$suffix",
-                    'foreignKey' => [
-                        'allowNulls' => true,
-                        'message'    => "Models\\ModuleStatusLookupSettings$suffix",
-                        'action'     => Relation::ACTION_RESTRICT,
-                    ],
-                ]
-            );
+            $model->hasMany($key, self::class, $field, [
+                'alias'      => "ModuleStatusLookupSettings$suffix",
+                'foreignKey' => [
+                    'allowNulls' => true,
+                    'message'    => "Models\\ModuleStatusLookupSettings$suffix",
+                    'action'     => Relation::ACTION_RESTRICT,
+                ],
+            ]);
         }
     }
 }

@@ -10,7 +10,22 @@ parameters:
         - ../../Models
         - ../../Setup
         - ../../Messages
+        - ../../agi-bin
     scanDirectories:
         - vendor/phalcon/ide-stubs/src
         - vendor/mikopbx/core/src
     tmpDir: .cache
+    ignoreErrors:
+        # Phalcon model annotations (@Indexes, @Column) are not PHPDoc types.
+        -
+            identifier: phpDoc.parseError
+            path: ../../Models/*
+        # The worker and the AGI scripts bootstrap the core with require_once
+        # 'Globals.php', which the core's include path resolves at run time (as
+        # in the core's own workers and AGI scripts).
+        -
+            identifier: requireOnce.fileNotFound
+            path: ../../Lib/WorkerStatusLookup.php
+        -
+            identifier: requireOnce.fileNotFound
+            path: ../../agi-bin/*

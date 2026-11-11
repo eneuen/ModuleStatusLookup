@@ -1,0 +1,162 @@
+<?php
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+declare(strict_types=1);
+
+namespace Modules\ModuleStatusLookup\Tests\Unit;
+
+use Modules\ModuleStatusLookup\Lib\DialplanBuilder;
+use Modules\ModuleStatusLookup\Lib\Settings;
+use PHPUnit\Framework\TestCase;
+
+final class DialplanBuilderTest extends TestCase
+{
+    private const string SOUNDS = '/offload/asterisk/sounds';
+
+    private static function builder(array $settings = [], string $language = 'en-en', array $paths = []): DialplanBuilder
+    {
+        $settings += ['internal_number' => '2300', 'active' => '1', 'operator_number' => '2000'] + Settings::DEFAULTS;
+
+        return new DialplanBuilder($settings, $language, self::SOUNDS, static fn (int $id): ?string => $paths[$id] ?? null);
+    }
+
+    public function testNumberInInternalAndTransfer(): void
+    {
+        $b = self::builder();
+
+        self::assertSame("exten => 2300,1,Goto(status-lookup,s,1)\n", $b->internal());
+        self::assertStringContainsString('exten => 2300,1,Set(__ISTRANSFER=transfer_)', $b->internalTransfer());
+        self::assertStringContainsString('Goto(internal,2300,1)', $b->internalTransfer());
+    }
+
+    public function testNothingWithoutAValidNumber(): void
+    {
+        foreach (['', '2300,1,Hangup()', "2300\nexten"] as $number) {
+            $b = self::builder(['internal_number' => $number]);
+            self::assertSame('', $b->internal());
+            self::assertSame('', $b->internalTransfer());
+            self::assertSame('', $b->contexts());
+        }
+    }
+
+    public function testEntryBehavesLikeTheCoreIvr(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString("[status-lookup]\nexten => s,1,Set(SL_V=1)", $conf);
+        self::assertStringContainsString('Set(APPEXTEN=2300)', $conf);
+        self::assertStringContainsString('Gosub(dial_app,${EXTEN},1)', $conf);
+        self::assertStringContainsString('Gosub(set-answer-state,${EXTEN},1)', $conf);
+        self::assertStringContainsString('Set(CHANNEL(hangup_handler_push)=status-lookup-end,s,1)', $conf);
+        self::assertStringContainsString('Set(CHANNEL(language)=en-en)', $conf);
+        self::assertStringNotContainsString('NEED_MONITOR', $conf);
+    }
+
+    public function testOwnTimeoutReplacesTheRoutesAndIsClearedBeforeLeaving(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString('Set(TIMEOUT(absolute)=120)', $conf);
+        $clear = strpos($conf, 'Set(TIMEOUT(absolute)=0)');
+        $goto = strpos($conf, 'Goto(internal,${SL_TARGET},1)');
+        self::assertNotFalse($clear);
+        self::assertNotFalse($goto);
+        self::assertLessThan($goto, $clear);
+        // The call is logged before the caller is sent on.
+        self::assertLessThan($goto, strpos($conf, 'Gosub(status-lookup-end,s,1)'));
+    }
+
+    public function testBuiltInPromptsByName(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString('Playback(modulestatuslookup-welcome)', $conf);
+        self::assertStringContainsString('Read(SL_IN,modulestatuslookup-enter-id,10,,1,5)', $conf);
+        self::assertStringContainsString('Read(SL_KEY,modulestatuslookup-repeat,1,,1,5)', $conf);
+    }
+
+    public function testBuiltInPromptsInEnglishForOtherLanguages(): void
+    {
+        $conf = self::builder([], 'de_DE')->contexts();
+
+        self::assertStringContainsString('Set(CHANNEL(language)=de-de)', $conf);
+        self::assertStringContainsString('Playback(/offload/asterisk/sounds/en-en/modulestatuslookup-welcome)', $conf);
+    }
+
+    public function testOwnSoundFilesAndUnsafePathsRefused(): void
+    {
+        $paths = [5 => '/storage/media/custom/hello', 6 => '/storage/media/x),Hangup(', 7 => "/storage/a\nb"];
+        $conf = self::builder(['welcome_prompt_id' => 5], 'en-en', $paths)->contexts();
+        self::assertStringContainsString('Playback(/storage/media/custom/hello)', $conf);
+
+        foreach ([6, 7, 99, 0] as $bad) {
+            $b = self::builder(['enter_id_prompt_id' => $bad], 'en-en', $paths);
+            self::assertFalse($b->isActive(), "prompt $bad");
+            self::assertStringNotContainsString('Hangup(,', $b->contexts());
+        }
+    }
+
+    public function testInactiveLineApologisesAndHangsUp(): void
+    {
+        foreach ([['active' => '0'], ['operator_number' => ''], ['operator_number' => '20,1']] as $settings) {
+            $b = self::builder($settings);
+            $conf = $b->contexts();
+            self::assertFalse($b->isActive());
+            self::assertStringContainsString('Set(SL_OUTCOME=inactive)', $conf);
+            self::assertStringContainsString('Playback(modulestatuslookup-fault)', $conf);
+            self::assertStringNotContainsString('Read(', $conf);
+        }
+    }
+
+    public function testDestinationsDefaultToTheOperator(): void
+    {
+        $conf = self::builder()->contexts();
+        // Operator, too many tries, rate limited, fault, and the fallback for a missing destination.
+        self::assertSame(5, substr_count($conf, 'Set(SL_TARGET=2000)'));
+
+        $conf = self::builder(['too_many_tries_number' => '2001', 'fault_number' => '2002'])->contexts();
+        self::assertStringContainsString("too_many),Set(SL_OUTCOME=too_many)\n\tsame => n,Set(SL_TARGET=2001)", $conf);
+        self::assertStringContainsString("fault),Set(SL_OUTCOME=fault)\n\tsame => n,Set(SL_TARGET=2002)", $conf);
+    }
+
+    public function testMissingDestinationGoesToTheFaultDestination(): void
+    {
+        $conf = self::builder(['fault_number' => '2002'])->contexts();
+
+        self::assertStringContainsString('(leave),GotoIf($["${SL_TARGET}x" != "x" & ${DIALPLAN_EXISTS(internal,${SL_TARGET},1)}]?go)', $conf);
+        self::assertStringContainsString("Set(SL_OUTCOME=fault)\n\tsame => n,Set(SL_TARGET=2002)\n\tsame => n,GotoIf(\${DIALPLAN_EXISTS(internal,\${SL_TARGET},1)}?go)", $conf);
+    }
+
+    public function testLimitsAreClamped(): void
+    {
+        $conf = self::builder(['max_tries' => 50, 'digit_timeout' => 0, 'id_min_length' => 1, 'id_max_length' => 99])->contexts();
+
+        self::assertStringContainsString('GotoIf($[${SL_TRIES} >= 9]?too_many)', $conf);
+        self::assertStringContainsString('Read(SL_IN,modulestatuslookup-enter-id,20,,1,1)', $conf);
+    }
+
+    public function testZeroGoesToAPersonBeforeAnyLookup(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertLessThan(strpos($conf, 'AGI(status_lookup.php,lookup)'), strpos($conf, 'GotoIf($["${SL_IN}" == "0"]?operator)'));
+    }
+
+    public function testHandOffRunsOnce(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString("[status-lookup-end]\nexten => s,1,GotoIf(\$[\"\${SL_LOGGED}\" == \"1\"]?done)", $conf);
+        self::assertSame(1, substr_count($conf, 'AGI(status_lookup_end.php)'));
+        // The destination is only logged once the caller is handed over.
+        self::assertStringContainsString('ExecIf($["${SL_SENT}" != "1"]?Set(SL_TARGET=))', $conf);
+        self::assertStringContainsString("Set(SL_SENT=1)\n\tsame => n,Gosub(status-lookup-end,s,1)", $conf);
+    }
+
+    public function testProblems(): void
+    {
+        self::assertSame([], DialplanBuilder::problems(['welcome' => null, 'enter_id' => 'x'], '2000'));
+        self::assertSame(['no_operator', 'prompt_enter_id'], DialplanBuilder::problems(['welcome' => 'x', 'enter_id' => null], ''));
+    }
+}
