@@ -21,7 +21,9 @@ use Modules\ModuleStatusLookup\Lib\Databases;
 use Modules\ModuleStatusLookup\Lib\DialplanBuilder;
 use Modules\ModuleStatusLookup\Lib\EditorException;
 use Modules\ModuleStatusLookup\Lib\IvrNumber;
+use Modules\ModuleStatusLookup\Lib\Lookup;
 use Modules\ModuleStatusLookup\Lib\PbxOptions;
+use Modules\ModuleStatusLookup\Lib\RecordEditor;
 use Modules\ModuleStatusLookup\Lib\Settings;
 use Modules\ModuleStatusLookup\Lib\StatusEditor;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
@@ -186,6 +188,62 @@ class ModuleStatusLookupController extends BaseController
         });
     }
 
+    /** GET records: search, status, stale (days), expired (1), page. */
+    public function recordsAction(): void
+    {
+        $this->json(fn (): array => $this->recordEditor($this->moduleDb())->list($this->recordQuery(), time()));
+    }
+
+    /** POST saveRecord: record (JSON object; with id to change one). Read at call time: no reload. */
+    public function saveRecordAction(): void
+    {
+        $this->write(function (): array {
+            $db = $this->writableModuleDb();
+            $id = $this->recordEditor($db)->save($this->jsonPost('record'), Lookup::idLengths(Settings::load($db)), $this->currentLogin(), time());
+
+            return ['id' => $id];
+        });
+    }
+
+    /** POST changeRecordStatus: ids (JSON list), status (code). */
+    public function changeRecordStatusAction(): void
+    {
+        $this->write(fn (): array => ['changed' => $this->recordEditor($this->writableModuleDb())
+            ->changeStatus($this->jsonPost('ids'), $this->request->getPost('status'), $this->currentLogin(), time())]);
+    }
+
+    /** POST deleteRecords: ids (JSON list). */
+    public function deleteRecordsAction(): void
+    {
+        $this->write(fn (): array => ['deleted' => $this->recordEditor($this->writableModuleDb())->delete($this->jsonPost('ids'))]);
+    }
+
+    /**
+     * GET exportRecords: the filtered records as a CSV download, in the
+     * import format. A plain page request (the browser downloads it), so no
+     * AJAX rule; the admins check in beforeExecuteRoute() still applies.
+     */
+    public function exportRecordsAction(): void
+    {
+        $this->view->disable();
+        try {
+            $csv = '';
+            $this->recordEditor($this->moduleDb())->export($this->recordQuery(), time(), function (string $line) use (&$csv): void {
+                $csv .= $line;
+            });
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(self::class, 'Export failed: ' . $e->getMessage(), LOG_ERR);
+            $this->response->setStatusCode(400);
+            $this->response->setContent('');
+
+            return;
+        }
+        $this->response->setContentType('text/csv', 'UTF-8');
+        $this->response->setHeader('Content-Disposition', 'attachment; filename="status-lookup-records-' . date('Y-m-d') . '.csv"');
+        $this->response->setHeader('Cache-Control', 'no-store');
+        $this->response->setContent($csv);
+    }
+
     /** 403 for anyone who is not an admin: JSON for AJAX, a page otherwise. */
     public function deniedAction(): void
     {
@@ -217,6 +275,35 @@ class ModuleStatusLookupController extends BaseController
             'usedBy'     => PbxOptions::numberUsers($this->coreDb(), $number),
             'maxSeconds' => DialplanBuilder::MAX_SECONDS,
         ];
+    }
+
+    private function recordEditor(PDO $db): RecordEditor
+    {
+        return new RecordEditor($db, StatusLookupConf::timezone());
+    }
+
+    /** @return array<string, string> The record filters as plain strings; RecordEditor checks each one. */
+    private function recordQuery(): array
+    {
+        $query = [];
+        foreach (['search', 'status', 'stale', 'expired', 'page'] as $name) {
+            $value = $this->request->getQuery($name);
+            $query[$name] = is_string($value) ? $value : '';
+        }
+
+        return $query;
+    }
+
+    /** The admin's login from the request's Bearer token (writes always carry one). */
+    private function currentLogin(): string
+    {
+        $header = (string)$this->request->getHeader('Authorization');
+        if (!str_starts_with($header, 'Bearer ')) {
+            return '';
+        }
+        $payload = $this->di->getShared(JwtProvider::SERVICE_NAME)->validate(substr($header, 7));
+
+        return is_array($payload) && is_string($payload['userId'] ?? null) ? $payload['userId'] : '';
     }
 
     private function statusEditor(PDO $db): StatusEditor

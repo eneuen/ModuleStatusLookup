@@ -46,7 +46,9 @@
     miss_limit_total: ["sl_MissLimitTotal", "All Callers Together"],
     operator_number: ["sl_Operator", "Operator"],
     too_many_tries_number: ["sl_TooManyTries", "After the Last Try"],
-    fault_number: ["sl_FaultDestination", "When a Lookup Fails"]
+    fault_number: ["sl_FaultDestination", "When a Lookup Fails"],
+    status_date: ["sl_ColDate", "Date"],
+    expires_on: ["sl_ColLastDay", "Last Day"]
   };
   var fieldName = (f) => FIELDS[f] ? t(FIELDS[f][0], FIELDS[f][1]) : f;
   var PROBLEMS = {
@@ -76,6 +78,13 @@
     not_ready: ["sl_Err_not_ready", "The line can't be switched on yet: {problems}"],
     number_format: ["sl_Err_number_format", "Enter 2 to 8 digits, not starting with 0."],
     number_taken: ["sl_Err_number_taken", "{number} is already used in the PBX. Choose another number."],
+    lookup_id: ["sl_Err_lookup_id", "Enter the ID as {min} to {max} digits, as callers type it (the lengths are set on the Call Flow tab)."],
+    lookup_id_taken: ["sl_Err_lookup_id_taken", "There is already a record with the ID {id}."],
+    record_status: ["sl_Err_record_status", "Choose a status from the list."],
+    record_gone: ["sl_Err_record_gone", "This record no longer exists. Reload the page."],
+    note: ["sl_Err_note", "Keep the note to {max} characters."],
+    date: ["sl_Err_date", 'Enter a valid date for "{field}".'],
+    bulk: ["sl_Err_bulk", "Choose 1 to {max} records."],
     status_gone: ["sl_Err_status_gone", "This status no longer exists. Reload the page."],
     code_format: ["sl_Err_code_format", "Use 1 to 32 capital letters, digits and _ for the code, such as READY."],
     code_taken: ["sl_Err_code_taken", "Another status already has the code {code}."],
@@ -660,13 +669,284 @@
     });
     if (moveTo) $(moveTo).dropdown();
   }
+  var STATUS_COLOURS = ["blue", "teal", "green", "orange", "purple", "brown", "olive", "pink", "violet", "yellow", "grey"];
+  var SOURCES = { form: ["sl_Source_form", "on this page"], csv: ["sl_Source_csv", "CSV import"], api: ["sl_Source_api", "API"] };
+  var records = { query: { search: "", status: "", stale: "0", expired: "", page: 1 }, selected: /* @__PURE__ */ new Set(), data: null, timer: null };
+  var shortDateTime = (epoch) => epoch ? new Date(epoch * 1e3).toLocaleString(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "\u2014";
+  var isoText = (iso) => iso ? (/* @__PURE__ */ new Date(`${iso}T00:00:00`)).toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" }) : "";
+  function statusLabel(code) {
+    const index = (state.statuses || []).findIndex((s) => s.code === code);
+    const status = index >= 0 ? state.statuses[index] : null;
+    return el(
+      "span",
+      { class: `ui small ${index >= 0 ? STATUS_COLOURS[index % STATUS_COLOURS.length] : "basic"} label`, title: code },
+      status ? status.name : code
+    );
+  }
+  var statusChoices = (allText) => [...allText ? [["", allText]] : [], ...(state.statuses || []).map((s) => [s.code, s.name])];
+  function recordsToolbar() {
+    const search = el("input", { type: "search", id: "sl-rec-search", value: records.query.search, placeholder: t("sl_SearchRecords", "ID or note"), "aria-label": t("sl_SearchRecords", "ID or note") });
+    search.addEventListener("input", () => {
+      clearTimeout(records.timer);
+      records.timer = setTimeout(() => {
+        records.query.search = search.value.trim();
+        records.query.page = 1;
+        loadRecords();
+      }, 300);
+    });
+    const status = select("sl-rec-status", statusChoices(t("sl_AllStatuses", "All Statuses")), records.query.status, { class: "ui dropdown", "aria-label": t("sl_ColStatus", "Status") });
+    const stale = select(
+      "sl-rec-stale",
+      [["0", t("sl_AnyUpdate", "Any Last Change")], ...[7, 30, 90].map((d) => [String(d), plural("sl_NotUpdatedIn", d, { one: "Not Changed in {n} Day", other: "Not Changed in {n} Days" })])],
+      records.query.stale,
+      { class: "ui dropdown", "aria-label": t("sl_LastChange", "Last change") }
+    );
+    const expired = el(
+      "div",
+      { class: "ui checkbox" },
+      el("input", { type: "checkbox", id: "sl-rec-expired", checked: records.query.expired === "1" }),
+      el("label", { for: "sl-rec-expired", text: t("sl_ExpiredOnly", "Expired Only") })
+    );
+    [status, stale].forEach((node) => node.addEventListener("change", () => {
+      records.query.status = status.value;
+      records.query.stale = stale.value;
+      records.query.page = 1;
+      loadRecords();
+    }));
+    expired.querySelector("input").addEventListener("change", (e) => {
+      records.query.expired = e.target.checked ? "1" : "";
+      records.query.page = 1;
+      loadRecords();
+    });
+    return el(
+      "div",
+      { class: "ui form sl-toolbar" },
+      el("div", { class: "ui left icon input sl-search" }, search, el("i", { class: "search icon" })),
+      status,
+      stale,
+      expired,
+      el(
+        "div",
+        { class: "sl-toolbar-end" },
+        el("button", { class: "ui basic button", type: "button", onclick: exportRecords }, el("i", { class: "download icon" }), t("sl_ExportCsv", "Export CSV")),
+        el(
+          "button",
+          { class: "ui primary button", type: "button", onclick: () => openRecord(null), disabled: !(state.statuses || []).length },
+          el("i", { class: "plus icon" }),
+          t("sl_AddRecord", "Add Record\u2026")
+        )
+      )
+    );
+  }
+  function bulkBar() {
+    const n = records.selected.size;
+    if (!n) return null;
+    const to = select("sl-bulk-status", statusChoices(null), "", { class: "ui dropdown", "aria-label": t("sl_NewStatus", "New status") });
+    return el(
+      "div",
+      { class: "sl-bulk ui form" },
+      el("strong", { text: plural("sl_Selected", n, { one: "{n} record selected", other: "{n} records selected" }) }),
+      el(
+        "div",
+        { class: "sl-inline" },
+        to,
+        el("button", { class: "ui button", type: "button", onclick: () => bulkStatus(to.value) }, t("sl_ChangeStatus", "Change Status")),
+        el("button", { class: "ui basic red button", type: "button", onclick: bulkDelete }, t("sl_DeleteSelected", "Delete Selected")),
+        el("button", { class: "ui basic button", type: "button", onclick: () => {
+          records.selected.clear();
+          renderRecords();
+        } }, t("sl_ClearSelection", "Clear Selection"))
+      )
+    );
+  }
+  function recordRow(r, today) {
+    const expired = r.expires_on && r.expires_on < today;
+    const box = el("input", { type: "checkbox", checked: records.selected.has(r.id), "aria-label": sub(t("sl_SelectRecord", "Select {id}"), { id: r.lookup_id }) });
+    box.addEventListener("change", () => {
+      if (box.checked) records.selected.add(r.id);
+      else records.selected.delete(r.id);
+      renderRecords();
+    });
+    return el(
+      "tr",
+      { class: expired ? "sl-expired" : "" },
+      el("td", { class: "sl-check-cell" }, box),
+      el("td", { class: "sl-code", text: r.lookup_id }),
+      el("td", {}, statusLabel(r.status_code)),
+      el("td", { class: "sl-nowrap", text: isoText(r.status_date) }),
+      el("td", { class: "sl-nowrap" }, expired ? el("span", { class: "sl-warn-text", text: sub(t("sl_ExpiredOn", "Expired {date}"), { date: isoText(r.expires_on) }) }) : isoText(r.expires_on)),
+      el("td", { class: "sl-note-cell", text: r.note }),
+      el(
+        "td",
+        { class: "sl-nowrap" },
+        el("div", { text: shortDateTime(r.updated_at) }),
+        el("div", { class: "sl-sub-line", text: [r.updated_by, SOURCES[r.source] ? label(SOURCES[r.source]) : ""].filter(Boolean).join(" \xB7 ") })
+      ),
+      el(
+        "td",
+        { class: "sl-actions-cell" },
+        el("button", { class: "ui basic button", type: "button", onclick: () => openRecord(r) }, t("sl_Edit", "Edit")),
+        iconButton("trash alternate outline", t("sl_DeleteRecord", "Delete Record"), () => deleteRecords([r.id], r.lookup_id))
+      )
+    );
+  }
+  function renderRecords() {
+    const d = records.data;
+    const box = $id("sl-records");
+    if (!(state.statuses || []).length) {
+      fill(box, el("div", { class: "ui message" }, el("p", { text: t("sl_RecordsNeedStatuses", "Add statuses first: every record has one. Open the Statuses tab.") })));
+      return;
+    }
+    const rows = d ? d.rows : [];
+    const all = rows.length > 0 && rows.every((r) => records.selected.has(r.id));
+    const allBox = el("input", { type: "checkbox", checked: all, "aria-label": t("sl_SelectPage", "Select all on this page") });
+    allBox.addEventListener("change", () => {
+      rows.forEach((r) => allBox.checked ? records.selected.add(r.id) : records.selected.delete(r.id));
+      renderRecords();
+    });
+    const filtered = records.query.search || records.query.status || records.query.stale !== "0" || records.query.expired;
+    const table = rows.length ? el(
+      "table",
+      { class: "ui very basic table sl-table" },
+      el("thead", {}, el(
+        "tr",
+        {},
+        el("th", { class: "sl-check-cell" }, allBox),
+        el("th", { text: t("sl_ColId", "ID") }),
+        el("th", { text: t("sl_ColStatus", "Status") }),
+        el("th", { text: t("sl_ColDate", "Date") }),
+        el("th", { text: t("sl_ColLastDay", "Last Day") }),
+        el("th", { text: t("sl_ColNote", "Note") }),
+        el("th", { text: t("sl_ColChanged", "Last Change") }),
+        el("th", {})
+      )),
+      el("tbody", {}, rows.map((r) => recordRow(r, d.today)))
+    ) : el("div", { class: "ui message" }, el("p", { text: filtered ? t("sl_NoMatches", "No records match these filters.") : t("sl_NoRecords", "No records yet. Add them one by one, or import a CSV file from your shop software or spreadsheet.") }));
+    const pager = d && d.pages > 1 ? el(
+      "div",
+      { class: "sl-pager" },
+      el("button", { class: "ui basic button", type: "button", disabled: d.page <= 1, onclick: () => {
+        records.query.page = d.page - 1;
+        loadRecords();
+      } }, t("sl_Previous", "Previous")),
+      el("span", { text: sub(t("sl_PageOf", "Page {page} of {pages}"), { page: count(d.page), pages: count(d.pages) }) }),
+      el("button", { class: "ui basic button", type: "button", disabled: d.page >= d.pages, onclick: () => {
+        records.query.page = d.page + 1;
+        loadRecords();
+      } }, t("sl_Next", "Next"))
+    ) : null;
+    const focused = document.activeElement && document.activeElement.id === "sl-rec-search";
+    fill(
+      box,
+      recordsToolbar(),
+      d ? el("div", { class: "sl-note sl-count", text: plural("sl_RecordCount", d.total, { one: "{n} record", other: "{n} records" }) }) : null,
+      bulkBar(),
+      table,
+      pager
+    );
+    $(box).find("select.ui.dropdown").dropdown({ placeholder: false });
+    $(box).find(".ui.checkbox").checkbox();
+    if (focused) {
+      const search = $id("sl-rec-search");
+      search.focus();
+      search.setSelectionRange(search.value.length, search.value.length);
+    }
+  }
+  function loadRecords() {
+    return get("records", records.query).then((d) => {
+      records.data = d;
+      records.query.page = d.page;
+      renderRecords();
+    });
+  }
+  function loadRecordsTab() {
+    fill($id("sl-records"), el("div", { class: "ui active centered inline loader" }));
+    get("statuses").then((d) => {
+      state.statuses = d.statuses;
+      return loadRecords();
+    });
+  }
+  function openRecord(r) {
+    const v = r || { lookup_id: "", status_code: state.statuses[0].code, note: "", status_date: "", expires_on: "" };
+    const form = $id("sl-record-form");
+    fill(
+      form,
+      el(
+        "div",
+        { class: "two fields" },
+        field(
+          t("sl_ColId", "ID"),
+          el("input", { type: "text", id: "sl-record-id", value: v.lookup_id, inputmode: "numeric", maxlength: "20", class: "sl-code-input" }),
+          t("sl_RecordIdHint", "The digits the caller types. Leading zeros count.")
+        ),
+        field(t("sl_ColStatus", "Status"), select("sl-record-status", statusChoices(null), v.status_code, { class: "ui dropdown" }))
+      ),
+      field(t("sl_ColNote", "Note"), el("input", { type: "text", id: "sl-record-note", value: v.note, maxlength: "200" }), t("sl_RecordNoteHint", "For staff only; never read out to callers.")),
+      el(
+        "div",
+        { class: "two fields" },
+        field(t("sl_ColDate", "Date"), el("input", { type: "date", id: "sl-record-date", value: v.status_date }), t("sl_RecordDateHint", "Spoken after the status, if the status says so.")),
+        field(t("sl_ColLastDay", "Last Day"), el("input", { type: "date", id: "sl-record-expires", value: v.expires_on }), t("sl_RecordExpiresHint", 'After this day, callers hear "not found". Empty: no end.'))
+      )
+    );
+    $(form).find("select.ui.dropdown").dropdown({ placeholder: false });
+    $id("sl-record-title").textContent = r ? t("sl_EditRecord", "Edit Record") : t("sl_AddRecordTitle", "Add Record");
+    const save = () => saveRecord(r ? r.id : null);
+    $id("sl-record-save").onclick = save;
+    $id("sl-record-cancel").onclick = () => $("#sl-record-modal").modal("hide");
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      save();
+    };
+    $("#sl-record-modal").modal({ autofocus: false }).modal("show");
+    if (!r) $id("sl-record-id").focus();
+  }
+  function saveRecord(id) {
+    const record = {
+      ...id ? { id } : {},
+      lookup_id: $id("sl-record-id").value,
+      status_code: $id("sl-record-status").value,
+      note: $id("sl-record-note").value,
+      status_date: $id("sl-record-date").value,
+      expires_on: $id("sl-record-expires").value
+    };
+    const button = $id("sl-record-save");
+    button.classList.add("loading");
+    post("saveRecord", { record: JSON.stringify(record) }).then(() => {
+      $("#sl-record-modal").modal("hide");
+      return loadRecords();
+    }).fail((xhr) => showModalError("sl-record-form", saveFailed(xhr))).always(() => button.classList.remove("loading"));
+  }
+  function bulkStatus(code) {
+    const ids = [...records.selected];
+    post("changeRecordStatus", { ids: JSON.stringify(ids), status: code }).then(() => {
+      records.selected.clear();
+      return loadRecords();
+    }).fail((xhr) => showError(saveFailed(xhr)));
+  }
+  function deleteRecords(ids, single) {
+    const text = single ? sub(t("sl_DeleteRecordText", 'Record {id} will be deleted. Callers who type it will hear "not found".'), { id: single }) : plural("sl_DeleteRecordsText", ids.length, { one: "{n} record will be deleted.", other: "{n} records will be deleted." });
+    const ok = single ? t("sl_DeleteRecord", "Delete Record") : plural("sl_DeleteRecordsButton", ids.length, { one: "Delete {n} Record", other: "Delete {n} Records" });
+    confirmDialog(t("sl_DeleteRecordsTitle", "Delete Records?"), text, ok).then((yes) => {
+      if (!yes) return;
+      post("deleteRecords", { ids: JSON.stringify(ids) }).then(() => {
+        ids.forEach((id) => records.selected.delete(id));
+        return loadRecords();
+      }).fail((xhr) => showError(saveFailed(xhr)));
+    });
+  }
+  var bulkDelete = () => deleteRecords([...records.selected], null);
+  function exportRecords() {
+    const { page, ...query } = records.query;
+    window.location.href = `${BASE}exportRecords?${$.param(query)}`;
+  }
   function updateTabsOverflow() {
     const tabs = $id("sl-tabs");
     const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
     tabs.classList.toggle("sl-overflow", overflow);
     tabs.classList.toggle("sl-at-end", overflow && tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
   }
-  var TABS = { statuses: loadStatuses, callflow: loadCallFlow };
+  var TABS = { records: loadRecordsTab, statuses: loadStatuses, callflow: loadCallFlow };
   function selectTab(tab) {
     if (state.tab === "callflow" && tab !== "callflow" && state.dirty) {
       confirmDialog(t("sl_LeaveTitle", "Leave Without Saving?"), t("sl_LeaveText", "Your changes to the call flow will be lost."), t("sl_Leave", "Leave")).then((ok) => {
@@ -697,7 +977,7 @@
     get("options").then((options) => {
       state.options = options;
       const asked = new URLSearchParams(window.location.search).get("tab");
-      selectTab(TABS[asked] ? asked : "statuses");
+      selectTab(TABS[asked] ? asked : "records");
     });
   }
   $(document).ready(init);

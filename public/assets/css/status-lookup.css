@@ -6,7 +6,7 @@
  * the same colours, spacing and type sizes. Text colours keep at least 4.5:1
  * contrast on white.
  */
-.sl-page, #sl-confirm-modal, #sl-status-modal {
+.sl-page, #sl-confirm-modal, #sl-status-modal, #sl-record-modal {
     --sl-primary: #2185d0;      /* blue 5 */
     --sl-text: #1f2933;         /* grey 9 */
     --sl-muted: #616e7c;        /* grey 5, 5.2:1 */
@@ -150,3 +150,26 @@
 @media (max-width: 767px) {
     .sl-page table.sl-table.ui.table thead { display: none !important; }
 }
+
+/* ---------------------------------------------------------------- records */
+
+.sl-page .sl-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sl-space-2) var(--sl-space-3); margin-bottom: var(--sl-space-3); }
+.sl-page .sl-toolbar .ui.dropdown { min-width: 12em; }
+.sl-page .sl-toolbar .sl-search { width: 16em; }
+.sl-page .sl-toolbar-end { margin-left: auto; display: flex; gap: var(--sl-space-2); flex-wrap: wrap; }
+.sl-page .sl-toolbar-end .ui.button { margin: 0; }
+.sl-page .sl-count { margin: 0 0 var(--sl-space-2); }
+.sl-page .sl-bulk {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--sl-space-3);
+    padding: var(--sl-space-2) var(--sl-space-3); margin-bottom: var(--sl-space-3);
+    background: var(--sl-surface); border: 1px solid var(--sl-border); border-radius: 6px;
+}
+.sl-page .sl-bulk .ui.dropdown { min-width: 12em; }
+.sl-page .sl-check-cell { width: 1%; }
+.sl-page .sl-note-cell { max-width: 22em; overflow-wrap: anywhere; color: var(--sl-muted); }
+.sl-page tr.sl-expired td { color: var(--sl-faint); }
+.sl-page tr.sl-expired td .ui.label { opacity: .6; }
+.sl-page .sl-pager { display: flex; align-items: center; gap: var(--sl-space-3); margin-top: var(--sl-space-4); }
+.sl-page .sl-pager .ui.button { margin: 0; }
+#sl-record-modal .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-2); }
+#sl-record-modal .sl-code-input { font-family: SFMono-Regular, Menlo, Consolas, monospace; }

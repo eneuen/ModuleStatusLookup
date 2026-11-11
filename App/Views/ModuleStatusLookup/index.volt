@@ -8,10 +8,15 @@
     <div class="ui negative message sl-hidden" id="sl-error" role="alert"></div>
 
     <div class="ui top attached tabular menu" id="sl-tabs">
+        <a class="item" data-tab="records">{{ t._('sl_TabRecords')|e }}</a>
         <a class="item" data-tab="statuses">{{ t._('sl_TabStatuses')|e }}</a>
         <div class="right menu">
             <a class="item" data-tab="callflow"><i class="cog icon"></i>{{ t._('sl_TabCallFlow')|e }}</a>
         </div>
+    </div>
+
+    <div class="ui bottom attached tab segment" data-tab="records">
+        <div id="sl-records"></div>
     </div>
 
     <div class="ui bottom attached tab segment" data-tab="statuses">
@@ -28,6 +33,15 @@
         <div class="actions">
             <button class="ui button" type="button" id="sl-status-cancel">{{ t._('sl_Cancel')|e }}</button>
             <button class="ui primary button" type="button" id="sl-status-save">{{ t._('sl_SaveStatus')|e }}</button>
+        </div>
+    </div>
+
+    <div class="ui small modal" id="sl-record-modal">
+        <div class="header" id="sl-record-title"></div>
+        <div class="content"><form class="ui form" id="sl-record-form"></form></div>
+        <div class="actions">
+            <button class="ui button" type="button" id="sl-record-cancel">{{ t._('sl_Cancel')|e }}</button>
+            <button class="ui primary button" type="button" id="sl-record-save">{{ t._('sl_SaveRecord')|e }}</button>
         </div>
     </div>
 
