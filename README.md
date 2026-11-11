@@ -41,7 +41,9 @@ curl -X PUT "https://pbx.example.com/pbxcore/api/v3/module-status-lookup/records
 
 **Access.** Create an API key on the PBX's API keys page and allow it the paths it needs, for example `/api/v3/module-status-lookup/records` with write access. Replacing all records is a path of its own (`/api/v3/module-status-lookup/records-replace`), so a key that updates records can't delete them all unless it is given that too. A key without the right access is refused with 401. Administrators' logins work as well, and, as everywhere in the PBX's REST API, scripts running on the PBX itself (localhost) need no key. A record changed through the API shows "API" and the key's description as who changed it.
 
-A refusal answers 400 with an error code in `data.error` and its details in `data.params`, such as `lookup_id` (the ID isn't within the call flow's lengths), `record_status` (unknown status code), `status_required`, `unknown_fields`, `pin`, `phone`, `note` or `date`.
+A refusal answers 400 with an error code in `data.error` and its details in `data.params`, such as `lookup_id` (the ID isn't within the call flow's lengths), `record_status` (unknown status code), `status_required`, `unknown_fields`, `field_type` (a field that isn't text, or a `dryRun` that isn't true or false), `pin`, `phone`, `note`, `note_http` or `date`.
+
+The PBX's REST layer treats any text value starting with "http" as a web address and removes its spaces and non-Latin letters before the module sees it, so a note starting with "http" is refused rather than stored damaged; put a word before the link.
 
 ## Requirements
 

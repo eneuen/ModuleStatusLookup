@@ -64,6 +64,9 @@ final class RecordsApiTest extends TestCase
             ['10445', ['status_code' => ['READY']], 'field_type'],
             ['10445', ['status_code' => 'READY', 'pin' => '12'], 'pin'],
             ['104', ['status_code' => 'READY'], 'lookup_id'],
+            ['10445', ['status_code' => true], 'field_type'],
+            ['10445', ['status_code' => 'READY', 'note' => 'https://track.example/1 shipped'], 'note_http'],
+            ['10445', ['status_code' => 'READY', 'phone' => '12345'], 'phone'],
         ] as [$id, $data, $code]) {
             try {
                 $this->api->put($id, $data, 'x', self::NOW);

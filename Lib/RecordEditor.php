@@ -347,7 +347,9 @@ final class RecordEditor
         if ($text === '') {
             return '';
         }
-        if (preg_match('/^\+?[0-9 ()\-.]{1,40}\z/', $text) !== 1 || strlen($digits = (string)preg_replace('/\D+/', '', $text)) > 20) {
+        // At least the digits the caller-ID check compares; a shorter number could never match.
+        $digits = (string)preg_replace('/\D+/', '', $text);
+        if (preg_match('/^\+?[0-9 ()\-.]{1,40}\z/', $text) !== 1 || strlen($digits) < Lookup::PHONE_DIGITS || strlen($digits) > 20) {
             throw new EditorException('phone');
         }
 

@@ -42,16 +42,9 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
     }
 
     /**
-     * After the core creates or extends the tables: makes sure the settings
-     * row exists and the IVR has a number in the core's extensions table. A
-     * new install takes back the number an earlier install left behind
-     * (because a route still pointed at it), else 2300 or the first free
-     * number up to 2399; a kept database keeps its number. If no number can be had, the install still
-     * succeeds and the admin chooses one on the module page.
-     */
-    /**
      * The core makes every module file world-readable (0644) here; the PIN
-     * key goes back to owner-only straight away.
+     * key (created now if there is none) goes back to owner-only straight
+     * away, and to the web server's user.
      */
     public function fixFilesRights(): bool
     {
@@ -65,6 +58,14 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
         return $result;
     }
 
+    /**
+     * After the core creates or extends the tables: makes sure the settings
+     * row exists and the IVR has a number in the core's extensions table. A
+     * new install takes back the number an earlier install left behind
+     * (because a route still pointed at it), else 2300 or the first free
+     * number up to 2399; a kept database keeps its number. If no number can be had, the install still
+     * succeeds and the admin chooses one on the module page.
+     */
     public function installDB(): bool
     {
         if (!parent::installDB()) {

@@ -437,9 +437,15 @@ class ModuleStatusLookupController extends BaseController
         return new RecordEditor($db, StatusLookupConf::timezone(), $this->pin());
     }
 
-    private function pin(): Pin
+    /** The PIN key; without a usable one, only setting a PIN is refused (and logged), everything else works. */
+    private function pin(): ?Pin
     {
-        return Pin::fromFile(StatusLookupConf::pinKeyFile());
+        try {
+            return Pin::fromFile(StatusLookupConf::pinKeyFile());
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(self::class, 'PIN key: ' . $e->getMessage(), LOG_ERR);
+            return null;
+        }
     }
 
     /** @return array<string, string> The record filters as plain strings; RecordEditor checks each one. */

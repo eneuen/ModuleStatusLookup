@@ -119,7 +119,7 @@
     forget_id: ["sl_Err_forget_id", "Enter the ID, as callers type it."],
     forget_phone: ["sl_Err_forget_phone", "Enter the number with at least {min} digits."],
     pin: ["sl_Err_pin", "Enter the PIN as 4 to 8 digits."],
-    phone: ["sl_Err_phone", "Enter the phone number as digits, up to 20, such as 4915112345678."],
+    phone: ["sl_Err_phone", "Enter the phone number with 7 to 20 digits, such as 4915112345678."],
     number_in_use: ["sl_Err_number_in_use", 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.']
   };
   function failText(xhr, fallback) {
@@ -863,7 +863,7 @@ ${x.script}\r
           "sl-status-callerid",
           v.requires_callerid,
           t("sl_StatusCallerId", "Only when calling from the record's phone number"),
-          t("sl_StatusCallerIdHint", 'Other callers hear "not found". Records without a phone number are never told.')
+          t("sl_StatusCallerIdHint", 'Other callers hear "not found"; callers whose record has no phone number are put through to the operator.')
         )
       )
     );
@@ -1195,6 +1195,14 @@ ${x.script}\r
     );
     $(form).find("select.ui.dropdown").dropdown({ placeholder: false });
     $(form).find(".ui.checkbox").checkbox();
+    const remove = $id("sl-record-remove-pin");
+    if (remove) {
+      remove.addEventListener("change", () => {
+        const pin = $id("sl-record-pin");
+        pin.disabled = remove.checked;
+        if (remove.checked) pin.value = "";
+      });
+    }
     $id("sl-record-title").textContent = r ? t("sl_EditRecord", "Edit Record") : t("sl_AddRecordTitle", "Add Record");
     const save = () => saveRecord(r ? r.id : null);
     $id("sl-record-save").onclick = save;
@@ -1254,7 +1262,7 @@ ${x.script}\r
     status: ["sl_Reject_status", "Unknown status code"],
     note: ["sl_Reject_note", "Note longer than 200 characters"],
     pin: ["sl_Reject_pin", "PIN isn't 4 to 8 digits"],
-    phone: ["sl_Reject_phone", "Phone isn't a phone number (digits, up to 20)"],
+    phone: ["sl_Reject_phone", "Phone isn't a phone number (7 to 20 digits)"],
     expires: ["sl_Reject_expires", "Last day isn't a date (YYYY-MM-DD)"],
     date: ["sl_Reject_date", "Date isn't a date (YYYY-MM-DD)"]
   };
@@ -1435,7 +1443,7 @@ ${x.script}\r
           )
         )
       ),
-      el("div", { class: "sl-note sl-narrow", text: t("sl_ImportHint", "A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date (as YYYY-MM-DD), pin (4 to 8 digits) and phone are optional. An empty pin keeps the record's PIN. Export CSV on the Records tab writes the same format, without PINs. Nothing changes until you check the file and press Import.") }),
+      el("div", { class: "sl-note sl-narrow", text: t("sl_ImportHint", "A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date (as YYYY-MM-DD), pin (4 to 8 digits) and phone are optional. An empty pin keeps the record's PIN; an empty phone removes it. Keep PINs as text in your spreadsheet, so leading zeros stay. Export CSV on the Records tab writes the same format, without PINs. Nothing changes until you check the file and press Import.") }),
       el(
         "div",
         { class: "ui form sl-import-form" },

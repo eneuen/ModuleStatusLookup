@@ -67,10 +67,11 @@ class WorkerStatusLookup extends WorkerBase
     /** The nightly clean-up; the next one is scheduled whatever happens, so a failure isn't retried every second. */
     private function maintenance(): void
     {
-        $timezone = StatusLookupConf::timezone();
-        $next = (new \DateTimeImmutable('now', $timezone))->setTime(self::MAINTENANCE_HOUR, 0);
-        $this->nextMaintenance = ($next->getTimestamp() > time() ? $next : $next->modify('+1 day'))->getTimestamp();
+        $this->nextMaintenance = time() + 86400;
         try {
+            $timezone = StatusLookupConf::timezone();
+            $next = (new \DateTimeImmutable('now', $timezone))->setTime(self::MAINTENANCE_HOUR, 0);
+            $this->nextMaintenance = ($next->getTimestamp() > time() ? $next : $next->modify('+1 day'))->getTimestamp();
             $db = Databases::openWritable(StatusLookupConf::moduleDbFile());
             $settings = Settings::load($db);
             $deleted = (new Retention($db, $timezone))->run(time(),

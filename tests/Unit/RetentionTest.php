@@ -62,13 +62,35 @@ final class RetentionTest extends TestCase
     {
         $now = (new DateTimeImmutable('2026-11-12 03:00', $this->tz))->getTimestamp();
         $retention = new Retention($this->db, $this->tz);
-        // 11 days: 2 November (00:00) to today stay; the call a minute before midnight goes.
-        self::assertSame(['calls' => 1, 'records' => 0], $retention->run($now, 11, false));
+        // 10 days: today and the 10 days before it (2 November from 00:00) stay; the call a minute before goes.
+        self::assertSame(['calls' => 1, 'records' => 0], $retention->run($now, 10, false));
         self::assertSame(['10446', '10445', '20001'], $this->ids());
         // Kept for ever.
         self::assertSame(['calls' => 0, 'records' => 0], $retention->run($now, 0, false));
         // The daily counts stay.
         self::assertSame(4, (int)$this->db->query('SELECT SUM(calls) FROM m_StatusLookupDailyCounts')->fetchColumn());
+    }
+
+    public function testMissesJustBeforeMidnightSurviveARunJustAfter(): void
+    {
+        // The miss limits count the last hour; the shortest retention still keeps yesterday whole.
+        $start = (new DateTimeImmutable('2026-11-12 23:40', $this->tz))->getTimestamp();
+        (new CallLogStore($this->db))->record(Handoff::fromChannel('late', ['SL_V' => '1', 'SL_STARTED' => (string)$start,
+            'SL_LEFT' => (string)($start + 20), 'SL_CALLER' => '5551234', 'SL_TRIES' => '3', 'SL_MISSES' => '3', 'SL_OUTCOME' => 'too_many',
+            'SL_RESULT' => 'not_found', 'SL_ID' => '99999', 'SL_STATUS' => '', 'SL_TARGET' => '', 'SL_TEST' => ''], $start + 20), $this->tz);
+        $now = (new DateTimeImmutable('2026-11-13 00:05', $this->tz))->getTimestamp();
+        (new Retention($this->db, $this->tz))->run($now, 1, false);
+        self::assertSame(['20001', '99999'], $this->ids());
+    }
+
+    public function testForgetIdCleansImportReports(): void
+    {
+        $this->db->exec("INSERT INTO m_StatusLookupImports (imported_at, imported_by, file_name, mode, added, updated, unchanged, deleted, rejected, report)
+            VALUES (0, 'admin', 'a.csv', 'update', 0, 0, 0, 0, 3,
+            '[{\"row\":2,\"reason\":\"date\",\"id\":\"10445\"},{\"row\":3,\"reason\":\"duplicate\",\"id\":\"10445 (2)\"},{\"row\":4,\"reason\":\"date\",\"id\":\"104450\"}]')");
+        (new Retention($this->db, $this->tz))->forgetId('10445');
+        $report = json_decode((string)$this->db->query('SELECT report FROM m_StatusLookupImports')->fetchColumn(), true);
+        self::assertSame(['104450'], array_column($report, 'id'));
     }
 
     public function testPurgeExpiredKeepsTheLastDayAndMalformedDates(): void

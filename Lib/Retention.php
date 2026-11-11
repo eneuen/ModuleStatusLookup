@@ -17,12 +17,15 @@ use PDO;
  * - The call log holds callers' numbers and the IDs they typed, so it is
  *   kept only as long as the PBX keeps its call history (its "keep call
  *   recordings" period; under 30 days means for ever, as in the core), or
- *   for the module's own number of days when one is set. Old calls are
- *   deleted by whole PBX day. The daily counts have no numbers and stay.
+ *   for the module's own number of days when one is set: today and the N
+ *   days before it, as the core keeps its call history. Old calls are
+ *   deleted by whole PBX day, but never within the last hour, which the
+ *   guessing protection counts. The daily counts have no numbers and stay.
  * - Records are the business's own data and stay until staff or the API
  *   delete them; expired ones can be purged every night (off by default).
- * - Forget: one ID (its record and every call that typed it), or one
- *   caller number (its calls, and the number on records).
+ * - Forget: one ID (its record, every call that typed it, and the rows
+ *   past imports left out with it), or one caller number (its calls, and
+ *   the number on records).
  *
  * The worker runs the nightly part; the page runs Forget.
  *
@@ -31,6 +34,9 @@ use PDO;
 final class Retention
 {
     public const int MAX_DAYS = 3650;
+
+    /** The guessing protection counts misses in the call log over this many seconds; they are never deleted sooner. */
+    private const int MISS_WINDOW = 3600;
 
     /** Below this, the PBX's call-history period means "keep for ever" (as in the core). */
     public const int CDR_MINIMUM = 30;
@@ -64,10 +70,10 @@ final class Retention
     {
         $today = (new DateTimeImmutable('@' . $now))->setTimezone($this->timezone)->setTime(0, 0);
         $deleted = ['calls' => 0, 'records' => 0];
-        Databases::immediate($this->db, function () use ($today, $days, $purgeExpired, &$deleted): void {
+        Databases::immediate($this->db, function () use ($now, $today, $days, $purgeExpired, &$deleted): void {
             if ($days > 0) {
-                // Today and the $days - 1 days before it stay.
-                $cutoff = $today->sub(new DateInterval('P' . ($days - 1) . 'D'))->getTimestamp();
+                // Today and the $days days before it stay; so does the last hour, which the miss limits count.
+                $cutoff = min($today->sub(new DateInterval("P{$days}D"))->getTimestamp(), $now - self::MISS_WINDOW);
                 $stmt = $this->db->prepare('DELETE FROM m_StatusLookupCallLog WHERE started_at < ?');
                 $stmt->execute([$cutoff]);
                 $deleted['calls'] = $stmt->rowCount();
@@ -85,7 +91,8 @@ final class Retention
     }
 
     /**
-     * Deletes one ID's record and every call that typed it.
+     * Deletes one ID's record and every call that typed it, and takes it
+     * out of the rows past imports left out.
      *
      * @return array{records: int, calls: int}
      *
@@ -105,9 +112,32 @@ final class Retention
             $stmt = $this->db->prepare('DELETE FROM m_StatusLookupCallLog WHERE id_entered = ?');
             $stmt->execute([$id]);
             $deleted['calls'] = $stmt->rowCount();
+            $this->forgetInImports($id);
         });
 
         return $deleted;
+    }
+
+    /**
+     * Removes the ID from past imports' reports of rows left out ("10445",
+     * or "10445 (12)" for a repeated ID). The counts stay as they were.
+     */
+    private function forgetInImports(string $id): void
+    {
+        $stmt = $this->db->prepare('SELECT id, report FROM m_StatusLookupImports WHERE report LIKE ?');
+        $stmt->execute(['%' . $id . '%']);
+        $update = $this->db->prepare('UPDATE m_StatusLookupImports SET report = ? WHERE id = ?');
+        foreach ($stmt->fetchAll(PDO::FETCH_NUM) as [$importId, $json]) {
+            $report = json_decode((string)$json, true);
+            if (!is_array($report)) {
+                continue;
+            }
+            $kept = array_values(array_filter($report, static fn (mixed $row): bool => !is_array($row)
+                || !is_string($row['id'] ?? null) || ($row['id'] !== $id && !str_starts_with($row['id'], "$id ("))));
+            if (count($kept) !== count($report)) {
+                $update->execute([json_encode($kept, JSON_THROW_ON_ERROR), (int)$importId]);
+            }
+        }
     }
 
     /**
@@ -122,7 +152,7 @@ final class Retention
     public function forgetCaller(mixed $phone): array
     {
         $phone = is_string($phone) ? Lookup::digits($phone) : '';
-        if (strlen($phone) < Lookup::PHONE_DIGITS || strlen($phone) > 20) {
+        if (strlen($phone) < Lookup::PHONE_DIGITS || strlen($phone) > 32) {
             throw new EditorException('forget_phone', ['min' => Lookup::PHONE_DIGITS]);
         }
         $tail = substr($phone, -Lookup::PHONE_DIGITS);

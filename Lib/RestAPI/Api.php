@@ -55,7 +55,7 @@ final class Api
             $data = is_array($request['data'] ?? null) ? $request['data'] : [];
             unset($data['_url'], $data['_idFromRequestBody'], $data['httpMethod']);
             $db = Databases::openWritable(StatusLookupConf::moduleDbFile());
-            $api = new RecordsApi($db, StatusLookupConf::timezone(), Pin::fromFile(StatusLookupConf::pinKeyFile()));
+            $api = new RecordsApi($db, StatusLookupConf::timezone(), self::pin());
             $out = $action($api, $data, self::caller($context));
             if ($out instanceof PBXApiResult) {
                 $out->processor = $result->processor;
@@ -70,6 +70,10 @@ final class Api
             $result->httpCode = in_array($e->errorCode, self::NOT_FOUND, true) ? 404
                 : (in_array($e->errorCode, self::FORBIDDEN, true) ? 403 : 400);
         } catch (PDOException $e) {
+            // The core's API worker runs the whole request again when the database was busy; nothing was written.
+            if (str_contains($e->getMessage(), 'database is locked')) {
+                throw $e;
+            }
             SystemMessages::sysLogMsg(self::class, 'Database error: ' . $e->getMessage(), LOG_ERR);
             $result->messages['error'][] = 'failed';
             $result->httpCode = 500;
@@ -80,6 +84,17 @@ final class Api
         }
 
         return $result;
+    }
+
+    /** The PIN key; without a usable one, only setting a PIN is refused, everything else works. */
+    private static function pin(): ?Pin
+    {
+        try {
+            return Pin::fromFile(StatusLookupConf::pinKeyFile());
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(self::class, 'PIN key: ' . $e->getMessage(), LOG_ERR);
+            return null;
+        }
     }
 
     /** The record ID from the path; IDs are digits, kept as text so leading zeros count. */

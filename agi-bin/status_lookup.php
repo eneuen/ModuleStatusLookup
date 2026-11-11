@@ -11,8 +11,11 @@
  *           SL_RESULT=fault, which sends the caller to a person.
  *   pin     for a status that asks for the record's PIN: plays the prompt
  *           given as the second argument, collects the PIN with GET DATA
- *           (it never reaches a channel variable or Asterisk's log; the
- *           dialplan's Read() would log it), and looks up again with it.
+ *           (so it never reaches a channel variable, as with the dialplan's
+ *           Read()), and looks up again with it. 0 alone sets SL_PIN0, and
+ *           the dialplan puts the caller through to a person. (The PBX's
+ *           Asterisk log records every key pressed on any call, a PBX-wide
+ *           setting the module can't change.)
  *   date    speaks the record's date (SL_DATE, epoch seconds) in the
  *           channel's language: weekday, month and day. Asterisk's
  *           SayUnixTime isn't loaded in MikoPBX; the AGI command SAY
@@ -65,19 +68,32 @@ if ($mode === 'pin') {
     if ((int)($typed['code'] ?? 0) !== 200 || $typedPin === '-1') {
         exit(0);   // the caller hung up; SL_RESULT stays fault, and the hangup handler logs the call
     }
+    if ($typedPin === '0') {
+        $agi->set_variable('SL_RESULT', 'need_pin');
+        $agi->set_variable('SL_PIN0', '1');
+        exit(0);
+    }
 }
 
 try {
     $db = Databases::openReadOnly(StatusLookupConf::moduleDbFile());
     $settings = Settings::load($db);
-    $lookup = new Lookup($db, $settings, StatusLookupConf::timezone(), [StatusLookupConf::class, 'promptPath'],
-        Pin::fromFile(StatusLookupConf::pinKeyFile()));
+    // Without a usable key, only statuses that ask for a PIN are affected: their callers go to a person (no_pin).
+    try {
+        $pin = Pin::fromFile(StatusLookupConf::pinKeyFile());
+    } catch (Throwable $e) {
+        SystemMessages::sysLogMsg('StatusLookup', 'PIN key: ' . $e->getMessage(), LOG_ERR);
+        $pin = null;
+    }
+    $lookup = new Lookup($db, $settings, StatusLookupConf::timezone(), [StatusLookupConf::class, 'promptPath'], $pin);
+    $input = (string)$agi->get_variable('SL_IN', true);
     $vars = $lookup->find(
-        (string)$agi->get_variable('SL_IN', true),
+        $input,
         (string)$agi->get_variable('SL_CALLER', true),
         (int)$agi->get_variable('SL_MISSES', true),
         time(),
         $typedPin,
+        (string)$agi->get_variable('SL_PINID', true) === $input ? (int)$agi->get_variable('SL_PINFAILS', true) : 0,
     );
 } catch (Throwable $e) {
     SystemMessages::sysLogMsg('StatusLookup', 'Lookup failed: ' . $e->getMessage(), LOG_ERR);

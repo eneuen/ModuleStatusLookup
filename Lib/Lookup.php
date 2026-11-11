@@ -30,8 +30,12 @@ use PDO;
  * - pin_failed / callerid_failed: a wrong PIN, or a caller number that isn't
  *   the record's phone number when the status requires it. The caller hears
  *   "not found", as for an unknown ID, so a guess learns nothing.
- * - no_pin: the status asks for a PIN but the record has none; the caller is
- *   put through to a person.
+ * - no_pin / no_phone: the status asks for a PIN, or is only for the
+ *   record's phone, but the record has none; the caller is put through to a
+ *   person.
+ * - pin_locked: the record's ID had too many wrong PINs in the last day,
+ *   from any caller; the caller is put through to a person instead of
+ *   being asked again.
  *
  * Every value set here matches a fixed pattern: the dialplan uses them in
  * Playback and Goto.
@@ -40,8 +44,14 @@ use PDO;
  */
 final class Lookup
 {
-    public const array RESULTS = ['hit', 'invalid', 'not_found', 'expired', 'rate_limited', 'fault', 'need_pin', 'no_pin', 'pin_failed',
-        'callerid_failed'];
+    public const array RESULTS = ['hit', 'invalid', 'not_found', 'expired', 'rate_limited', 'fault', 'need_pin', 'no_pin', 'no_phone',
+        'pin_failed', 'pin_locked', 'callerid_failed'];
+
+    /** Wrong PINs for one ID, from all callers together, before its PIN is no longer asked for. */
+    public const int PIN_FAILS_LIMIT = 10;
+
+    /** The period those wrong PINs are counted over, in seconds. */
+    public const int PIN_FAILS_WINDOW = 86400;
 
     /** Caller numbers match a record's phone on their last digits, at least this many (country prefixes differ). */
     public const int PHONE_DIGITS = 7;
@@ -85,10 +95,11 @@ final class Lookup
      * @param string $caller The caller's number, digits only; '' when withheld.
      * @param int $missesThisCall Failed tries earlier in this call, not yet in the log.
      * @param string|null $typedPin The PIN the caller typed, on the second lookup of a status that asks for one.
+     * @param int $pinFailsThisCall Wrong PINs for this same ID earlier in this call, not yet in the log.
      *
      * @return array<string, string> Channel variable => value; every SL_ variable is set.
      */
-    public function find(string $input, string $caller, int $missesThisCall, int $now, ?string $typedPin = null): array
+    public function find(string $input, string $caller, int $missesThisCall, int $now, ?string $typedPin = null, int $pinFailsThisCall = 0): array
     {
         $vars = ['SL_RESULT' => '', 'SL_ID' => '', 'SL_STATUS' => '', 'SL_PROMPT' => '', 'SL_EXTRA' => 'none',
             'SL_DATE' => '', 'SL_ACTION' => '', 'SL_TRANSFER' => ''];
@@ -119,13 +130,22 @@ final class Lookup
         }
 
         // The status's own checks come before anything about it is returned: first the caller's number, then the PIN.
-        if (($row['requires_callerid'] ?? '0') === '1' && !self::samePhone($caller, (string)($row['phone'] ?? ''))) {
-            return ['SL_RESULT' => 'callerid_failed'] + $vars;
+        if (($row['requires_callerid'] ?? '0') === '1') {
+            $phone = (string)($row['phone'] ?? '');
+            if (strlen(self::digits($phone)) < self::PHONE_DIGITS) {
+                return ['SL_RESULT' => 'no_phone'] + $vars;
+            }
+            if (!self::samePhone($caller, $phone)) {
+                return ['SL_RESULT' => 'callerid_failed'] + $vars;
+            }
         }
         if (($row['requires_pin'] ?? '0') === '1') {
             $stored = (string)($row['pin_hash'] ?? '');
             if ($stored === '' || $this->pin === null) {
                 return ['SL_RESULT' => 'no_pin'] + $vars;
+            }
+            if ($this->pinFails($input, $now) + $pinFailsThisCall >= self::PIN_FAILS_LIMIT) {
+                return ['SL_RESULT' => 'pin_locked'] + $vars;
             }
             if ($typedPin === null) {
                 return ['SL_RESULT' => 'need_pin'] + $vars;
@@ -228,6 +248,15 @@ final class Lookup
         }
 
         return false;
+    }
+
+    /** Wrong PINs typed for this ID in the last PIN_FAILS_WINDOW, by any caller (test calls too: they are real guesses). */
+    private function pinFails(string $id, int $now): int
+    {
+        $stmt = $this->db->prepare('SELECT COALESCE(SUM(pin_fails), 0) FROM m_StatusLookupCallLog WHERE pin_id = ? AND started_at >= ?');
+        $stmt->execute([$id, $now - self::PIN_FAILS_WINDOW]);
+
+        return (int)$stmt->fetchColumn();
     }
 
     /** Noon of a YYYY-MM-DD date in the PBX's time zone, as epoch seconds, or '' when it isn't one. */

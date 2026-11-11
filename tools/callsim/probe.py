@@ -61,6 +61,7 @@ RECORDS = [
     ("40002", "PRIVATE", "", "", "", ""),
     ("40003", "MINE", "", "", callsim.CALLER, ""),
     ("40004", "MINE", "", "", OTHER_PHONE, ""),
+    ("40005", "MINE", "", "", "", ""),
 ]
 SETTINGS = {
     "active": "1", "operator_number": OPERATOR, "too_many_tries_number": TOO_MANY, "fault_number": FAULT,
@@ -118,7 +119,9 @@ class Probe:
         settings = {**SETTINGS, **changes}
         assignments = ", ".join(f"{k} = {quote(v)}" for k, v in settings.items())
         statements = [f"UPDATE m_StatusLookupSettings SET {assignments} WHERE id = 1",
-                      "DELETE FROM m_StatusLookupStatuses", "DELETE FROM m_StatusLookupRecords"]
+                      "DELETE FROM m_StatusLookupStatuses", "DELETE FROM m_StatusLookupRecords",
+                      # Wrong PINs from earlier runs would lock the probe's PIN record.
+                      "UPDATE m_StatusLookupCallLog SET pin_fails = 0, pin_id = ''"]
         for code, prompt, extra, action, transfer, pin, own in STATUSES:
             statements.append("INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, transfer_number, "
                               f"requires_pin, requires_callerid) VALUES ({quote(code)}, {quote(code)}, {prompt}, {quote(extra)}, {quote(action)}, "
@@ -543,9 +546,10 @@ def pin_right(p, c):
     hit = wait_event(since, "pin", timeout=15, result="hit")
     c.that(hit and hit.get("status") == "PRIVATE", f"right PIN: status PRIVATE ({hit})")
     c.that(wait_event(since, "goodbye", timeout=30) is not None, "goodbye (hang-up after-action)")
+    # Asterisk logs each key pressed on its own line (a PBX setting); the PIN as a whole is in no variable or dialplan line.
     logged = docker("exec", PBX_CONTAINER, "sh", "-c", f"tail -c +{since + 1} {VERBOSE_LOG} | grep -c {PIN} || true", capture=True)
-    c.that(logged.strip() == "0", "the PIN isn't in Asterisk's log")
-    check_row(c, p, log_id, outcome="hit", status_code="PRIVATE", last_result="hit", id_entered="40001")
+    c.that(logged.strip() == "0", "the PIN as a whole is in no variable or dialplan line")
+    check_row(c, p, log_id, outcome="hit", status_code="PRIVATE", last_result="hit", id_entered="40001", misses=0)
 
 
 @scenario("A wrong PIN: heard as not found, counted as a miss, and the caller can try again with another ID.")
@@ -561,7 +565,7 @@ def pin_wrong(p, c):
     caller.keys("10445#")
     c.that(wait_event(since, "lookup", timeout=15, result="hit", id="10445") is not None, "the next try works")
     caller.hangup(); pause(2)
-    check_row(c, p, log_id, outcome="hit", status_code="READY", tries=2, misses=1)
+    check_row(c, p, log_id, outcome="hit", status_code="READY", tries=2, misses=1, pin_fails=1, pin_id="40001")
 
 
 @scenario("A status that asks for a PIN, on a record without one: the caller is put through to the operator.")
@@ -572,7 +576,7 @@ def no_pin_stored(p, c):
     c.that(wait_event(since, "lookup", timeout=15, result="no_pin") is not None, "lookup result: no_pin")
     c.that(rang(op, 15), "the operator rings")
     caller.hangup(); pause(2)
-    check_row(c, p, log_id, outcome="operator", last_result="no_pin", target=OPERATOR, misses=0)
+    check_row(c, p, log_id, outcome="operator", last_result="no_pin", target=OPERATOR, misses=1)
 
 
 @scenario("A status only for the record's own phone, called from that phone: the status plays.")
@@ -594,6 +598,48 @@ def callerid_mismatch(p, c):
     pause(2)
     caller.hangup(); pause(2)
     check_row(c, p, log_id, outcome="abandoned", last_result="callerid_failed", misses=1)
+
+
+@scenario("0 at the PIN prompt reaches the operator.")
+def zero_at_pin(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller, op = call_in(p), Line(OPERATOR)
+    enter(since, caller, "40001#")
+    c.that(wait_event(since, "lookup", timeout=15, result="need_pin") is not None, "the lookup asks for the PIN")
+    pause(2)
+    caller.keys("0#")
+    c.that(rang(op, 15), "the operator rings")
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="operator", target=OPERATOR, misses=1, pin_fails=0)
+
+
+@scenario("An ID with 10 wrong PINs in the last day, from other callers: its PIN isn't asked for, the operator rings.")
+def pin_locked(p, c):
+    sql("INSERT INTO m_StatusLookupCallLog (linkedid, started_at, ended_at, caller, outcome, is_test, pin_fails, pin_id) "
+        "VALUES ('probe-lock', strftime('%s','now') - 600, strftime('%s','now') - 590, '999', 'abandoned', '0', 10, '40001')")
+    try:
+        since, log_id = log_size(), p.last_log_id()
+        caller, op = call_in(p), Line(OPERATOR)
+        enter(since, caller, "40001#")
+        c.that(wait_event(since, "lookup", timeout=15, result="pin_locked") is not None, "lookup result: pin_locked")
+        c.that(rang(op, 15), "the operator rings")
+        caller.hangup(); pause(2)
+        found = rows(f"SELECT * FROM m_StatusLookupCallLog WHERE id > {log_id} AND linkedid != 'probe-lock' ORDER BY id")
+        c.that(len(found) == 1 and found[0]["outcome"] == "operator" and found[0]["last_result"] == "pin_locked",
+               f"logged as pin_locked, to the operator ({found[:1]})")
+    finally:
+        sql("DELETE FROM m_StatusLookupCallLog WHERE linkedid = 'probe-lock' OR pin_id = '40001'")
+
+
+@scenario("A status only for the record's own phone, on a record without a phone: the operator rings.")
+def no_phone_stored(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    caller, op = call_in(p), Line(OPERATOR)
+    enter(since, caller, "40005#")
+    c.that(wait_event(since, "lookup", timeout=15, result="no_phone") is not None, "lookup result: no_phone")
+    c.that(rang(op, 15), "the operator rings")
+    caller.hangup(); pause(2)
+    check_row(c, p, log_id, outcome="operator", last_result="no_phone", target=OPERATOR, misses=1)
 
 
 # --------------------------------------------------------------------------- running

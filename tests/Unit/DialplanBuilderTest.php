@@ -214,9 +214,14 @@ final class DialplanBuilderTest extends TestCase
     {
         $conf = self::builder()->contexts();
 
-        self::assertStringContainsString("GotoIf(\$[\"\${SL_RESULT}\" != \"need_pin\"]?checked)\n\tsame => n,Set(SL_RESULT=fault)\n\tsame => n,AGI(status_lookup.php,pin,modulestatuslookup-enter-pin,5)", $conf);
-        self::assertStringNotContainsString('SL_PIN', $conf);
-        self::assertStringContainsString('GotoIf($["${SL_RESULT}" == "no_pin"]?operator)', $conf);
+        // Being asked for a PIN counts as a miss until the PIN is right.
+        self::assertStringContainsString("GotoIf(\$[\"\${SL_RESULT}\" != \"need_pin\"]?checked)\n\tsame => n,Set(SL_MISSES=\$[\${SL_MISSES} + 1])\n"
+            . "\tsame => n,Set(SL_RESULT=fault)\n\tsame => n,Set(SL_PIN0=)\n\tsame => n,AGI(status_lookup.php,pin,modulestatuslookup-enter-pin,5)", $conf);
+        self::assertStringContainsString("same => n(pin_ok),Set(SL_MISSES=\$[\${SL_MISSES} - 1])", $conf);
+        // No variable ever holds the typed PIN: only the script sees it.
+        self::assertDoesNotMatchRegularExpression('/Set\(SL_PIN=|Read\(SL_PIN/', $conf);
+        self::assertStringContainsString('ExecIf($["${SL_RESULT}" == "pin_failed"]?Set(SL_PINID=${SL_ID}))', $conf);
+        self::assertStringContainsString('same => n(counted),GotoIf($["${SL_RESULT}" == "no_pin" | "${SL_RESULT}" == "no_phone" | "${SL_RESULT}" == "pin_locked"]?operator)', $conf);
     }
 
     public function testProblems(): void

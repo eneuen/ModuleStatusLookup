@@ -35,51 +35,92 @@ final class Pin
         }
     }
 
-    /** The key in $file, created (random, root-only) if there is none yet. */
+    /** A key file holds 64 hex digits (32 random bytes), nothing else. */
+    private const string KEY_PATTERN = '/^[0-9a-f]{64}\z/';
+
+    /**
+     * The key in $file, created if there is none yet.
+     *
+     * A new key is written to a temporary file in the same folder and only
+     * then linked into place, so no process ever reads a half-written key,
+     * and when two create one at once, the first link wins and both use it.
+     * The folder belongs to the web server's user (www), while calls and the
+     * REST API run as root, so root never follows a link here: a key that is
+     * a link, or anything but a regular file, is refused.
+     *
+     * @throws RuntimeException When there is no usable key.
+     */
     public static function fromFile(string $file): self
     {
-        if (!is_file($file)) {
-            // 'x' fails if another process created it first; then that one is read.
-            $handle = @fopen($file, 'x');
-            if ($handle !== false) {
-                chmod($file, 0600);
-                fwrite($handle, bin2hex(random_bytes(32)));
-                fclose($handle);
-            }
+        if (!file_exists($file) && !is_link($file)) {
+            self::create($file);
         }
-        if (is_file($file)) {
-            self::secure($file);
+        if (is_link($file) || !is_file($file)) {
+            throw new RuntimeException('PIN key is not a regular file');
         }
+        self::secure($file);
         $key = trim((string)@file_get_contents($file));
-        if ($key === '') {
-            throw new RuntimeException('PIN key not readable');
+        if (preg_match(self::KEY_PATTERN, $key) !== 1) {
+            throw new RuntimeException('PIN key is unreadable or damaged');
         }
 
         return new self($key);
     }
 
+    private static function create(string $file): void
+    {
+        $dir = dirname($file);
+        $temp = @tempnam($dir, '.pin-');   // created 0600, in the same folder, so link() works
+        // tempnam() falls back to the system's temp folder when it can't write here; link() would then fail anyway.
+        if ($temp === false || realpath(dirname($temp)) !== realpath($dir)) {
+            if ($temp !== false) {
+                @unlink($temp);
+            }
+            throw new RuntimeException('PIN key can\'t be created');
+        }
+        try {
+            if (@file_put_contents($temp, bin2hex(random_bytes(32))) !== 64) {
+                throw new RuntimeException('PIN key can\'t be written');
+            }
+            self::handOver($temp);
+            // Fails if another process linked its key first; that one is used.
+            @link($temp, $file);
+        } finally {
+            @unlink($temp);
+        }
+    }
+
     /**
      * Keeps the key readable by its owner only. The core resets module files
-     * to 0644 when it installs a module, and the key is first written by
-     * whichever runs first: the web server (user www) or a call (root). So
-     * every read tightens the mode again, and root hands the file to the
-     * owner of its folder (www), so the admin page can still read it.
+     * to 0644 when it installs a module, so a read by the owner (www)
+     * tightens the mode again; root does so only for a regular file.
      */
     private static function secure(string $file): void
     {
         $perms = @fileperms($file);
-        if ($perms !== false && ($perms & 0077) !== 0) {
+        if ($perms !== false && ($perms & 0077) !== 0 && !is_link($file)) {
             @chmod($file, 0600);
         }
-        if (function_exists('posix_getuid') && posix_getuid() === 0) {
-            $owner = @fileowner(dirname($file));
-            $group = @filegroup(dirname($file));
-            if ($owner !== false && @fileowner($file) !== $owner) {
-                @chown($file, $owner);
-            }
-            if ($group !== false && @filegroup($file) !== $group) {
-                @chgrp($file, $group);
-            }
+        self::handOver($file);
+    }
+
+    /** As root: gives the file to the owner of its folder (www), without following links. */
+    private static function handOver(string $file): void
+    {
+        if (!function_exists('posix_getuid') || posix_getuid() !== 0) {
+            return;
+        }
+        $owner = @fileowner(dirname($file));
+        $group = @filegroup(dirname($file));
+        $stat = @lstat($file);
+        if ($stat === false) {
+            return;
+        }
+        if ($owner !== false && $stat['uid'] !== $owner) {
+            @lchown($file, $owner);
+        }
+        if ($group !== false && $stat['gid'] !== $group) {
+            @lchgrp($file, $group);
         }
     }
 

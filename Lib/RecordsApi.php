@@ -90,9 +90,14 @@ final class RecordsApi
             throw new EditorException('unknown_fields', ['fields' => implode(',', array_map('strval', $unknown))]);
         }
         foreach ($data as $field => $value) {
-            if (!is_string($value) && !is_bool($value) && !is_null($value)) {
+            if (!(is_string($value) || is_null($value) || ($field === 'remove_pin' && is_bool($value)))) {
                 throw new EditorException('field_type', ['field' => $field]);
             }
+        }
+        // The PBX's REST layer treats any text starting with "http" as a web address and strips its spaces and
+        // non-Latin letters before the module sees it; refused rather than stored damaged.
+        if (is_string($data['note'] ?? null) && stripos($data['note'], 'http') === 0) {
+            throw new EditorException('note_http');
         }
         $lengths = Lookup::idLengths(Settings::load($this->db));
 
@@ -136,6 +141,10 @@ final class RecordsApi
      */
     public function import(mixed $csv, string $mode, bool $dryRun, string $by, int $now): array
     {
+        // A CSV starting with "http" would arrive damaged (see put()); a real one starts with its header row.
+        if (is_string($csv) && stripos($csv, 'http') === 0) {
+            throw new EditorException('file_header');
+        }
         if (!is_string($csv) || $csv === '') {
             throw new EditorException('file_empty');
         }

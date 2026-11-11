@@ -46,15 +46,27 @@ final class Processor
 
     /**
      * A CSV import: {"csv": "...", "dryRun": true}. Also used by
-     * records-replace, with mode replace.
+     * records-replace, with mode replace. Anything else in the request is
+     * refused, and dryRun must be clearly true or false: a misspelt dry run
+     * must never import for real (on records-replace, it would delete).
      *
      * @param array<string, mixed> $data
      *
      * @return array<string, mixed>
+     *
+     * @throws EditorException
      */
     public static function import(RecordsApi $api, array $data, string $mode, string $by): array
     {
-        $dryRun = filter_var($data['dryRun'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        unset($data['id']);
+        $unknown = array_diff(array_keys($data), ['csv', 'dryRun']);
+        if ($unknown !== []) {
+            throw new EditorException('unknown_fields', ['fields' => implode(',', array_map('strval', $unknown))]);
+        }
+        $dryRun = filter_var($data['dryRun'] ?? false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($dryRun === null) {
+            throw new EditorException('field_type', ['field' => 'dryRun']);
+        }
 
         return $api->import($data['csv'] ?? null, $mode, $dryRun, $by, time());
     }
