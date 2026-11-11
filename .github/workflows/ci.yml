@@ -1,0 +1,40 @@
+# Checks every push and pull request: unit tests, lint, banned functions and
+# static analysis against the MikoPBX core.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  # A release workflow can run these same checks before it packages a tag.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_sqlite
+          coverage: none
+      - run: composer install --no-interaction --no-progress
+      - run: composer lint
+      - run: composer test
+      - run: composer check-banned
+
+  phpstan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      # The core's PHP extensions (Phalcon and others) are only needed to run it, not to analyse it.
+      - run: composer install -d tools/phpstan --no-interaction --no-progress --ignore-platform-req='ext-*'
+      - run: composer analyse
