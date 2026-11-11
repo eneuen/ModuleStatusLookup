@@ -9,6 +9,7 @@ namespace Modules\ModuleStatusLookup\Lib;
 use InvalidArgumentException;
 use MikoPBX\Core\System\BeanstalkClient;
 use MikoPBX\Core\System\SystemMessages;
+use MikoPBX\Core\System\Util;
 use MikoPBX\Core\Workers\WorkerBase;
 use Throwable;
 
@@ -21,6 +22,9 @@ require_once 'Globals.php';
  * Each call the hand-off AGI script queues is validated again (Handoff) and
  * written to the call log and daily counts (CallLogStore). This worker is
  * their only writer.
+ *
+ * Requests from the module's page arrive on StatusLookupConf::COMMANDS_TUBE:
+ * a test call, which needs the AMI connection the web process doesn't have.
  *
  * The logic lives in plain, unit-tested classes; this class only wires them
  * to the PBX.
@@ -35,6 +39,7 @@ class WorkerStatusLookup extends WorkerBase
 
         $client = new BeanstalkClient(self::class);
         $client->subscribe(self::class, [$this, 'onRecord']);
+        $client->subscribe(StatusLookupConf::COMMANDS_TUBE, [$this, 'onCommand']);
         $client->subscribe($this->makePingTubeName(self::class), [$this, 'pingCallBack']);
 
         while ($this->needRestart === false) {
@@ -53,6 +58,57 @@ class WorkerStatusLookup extends WorkerBase
         } catch (Throwable $e) {
             // Logged, not rethrown: a rethrow would bury the job and stop nothing.
             SystemMessages::sysLogMsg(static::class, 'Storing a call record failed: ' . $e->getMessage(), LOG_ERR);
+        }
+    }
+
+    /**
+     * A request from the page. The page has checked it; it is checked again
+     * here, because anything that can publish to the queue reaches this.
+     */
+    public function onCommand(BeanstalkClient $message): void
+    {
+        try {
+            $request = json_decode($message->getBody(), true, 4, JSON_THROW_ON_ERROR);
+            if (!is_array($request) || ($request['command'] ?? '') !== StatusLookupConf::COMMAND_TEST_CALL) {
+                throw new InvalidArgumentException('Unknown command');
+            }
+            $this->testCall((string)($request['extension'] ?? ''));
+        } catch (InvalidArgumentException | \JsonException $e) {
+            SystemMessages::sysLogMsg(static::class, 'Command rejected: ' . $e->getMessage(), LOG_WARNING);
+        } catch (Throwable $e) {
+            SystemMessages::sysLogMsg(static::class, 'Command failed: ' . $e->getMessage(), LOG_ERR);
+        }
+    }
+
+    /**
+     * Rings an employee's extension; once answered, that call enters the
+     * lookup line's number in [internal], marked as a test (SL_TEST), so it
+     * is logged but left out of the numbers and the miss limits.
+     */
+    private function testCall(string $extension): void
+    {
+        $core = Databases::openReadOnly((string)$this->di->getShared('config')->path('database.dbfile'));
+        if (!in_array($extension, array_column(PbxOptions::extensions($core), 'number'), true)) {
+            throw new InvalidArgumentException('Unknown extension');
+        }
+        $number = (string)Settings::load(Databases::openReadOnly(StatusLookupConf::moduleDbFile()))['internal_number'];
+        if (!IvrNumber::isValid($number)) {
+            throw new InvalidArgumentException('The line has no number');
+        }
+        $result = Util::getAstManager('off')->Originate(
+            "Local/$extension@internal",
+            $number,
+            'internal',
+            1,
+            null,
+            null,
+            30000,
+            // The phone shows who is calling; the call log shows the tester's extension as the caller.
+            '"' . CoreNumber::LABEL . '" <' . $extension . '>',
+            'SL_TEST=1',
+        );
+        if (strcasecmp((string)($result['Response'] ?? ''), 'Success') !== 0) {
+            throw new \RuntimeException('Originate refused: ' . ($result['Message'] ?? 'no response'));
         }
     }
 }

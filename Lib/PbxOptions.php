@@ -59,6 +59,19 @@ final class PbxOptions
     }
 
     /**
+     * Employees' extensions, for the test call.
+     *
+     * @return list<array{number: string, name: string}>
+     */
+    public static function extensions(PDO $core): array
+    {
+        $rows = $core->query("SELECT number, callerid FROM m_Extensions WHERE type = 'SIP' AND userid IS NOT NULL ORDER BY number")->fetchAll(PDO::FETCH_ASSOC);
+
+        return array_values(array_map(static fn (array $r): array => ['number' => (string)$r['number'], 'name' => (string)$r['callerid']],
+            array_filter($rows, static fn (array $r): bool => preg_match('/^[0-9]{2,8}\z/', (string)$r['number']) === 1)));
+    }
+
+    /**
      * What sends callers to a number: incoming routes, IVR menu options and
      * timeouts, and off-work time rules.
      *

@@ -64,6 +64,7 @@ If the phones don't register during `setup`, they may have tried before the PBX 
 | `no_fall_through` | After goodbye the call ends: no fall-through to the route's default action, no phone rings |
 | `transfer_from_phone` | A phone blind-transfers a caller to the lookup line, where they look up an ID |
 | `miss_limit` | After two misses (limit 2), the caller's next call goes straight to the operator |
+| `test_call` | The page's test call rings 302 through the module's worker; answered, it runs the line and is logged as a test call |
 | `inactive` | A line that isn't switched on doesn't answer, so the route moves on; the call is still logged |
 | `lookup_script_fails` | With the lookup script's link missing, a valid ID sends the caller to the fault destination |
 | `time_limit` | A caller who never types is sent to the too-many-tries destination at the 2-minute limit (takes about 2 minutes) |
@@ -76,6 +77,7 @@ Every scenario that completes a call also checks the one call-log row the worker
 | --- | --- |
 | `callsim.py` | Driver: setup and teardown of the phones, carrier and PBX objects; call and call-record helpers |
 | `probe.py` | The scenarios |
+| `page_client.py` | Calls the module page's actions as the page does |
 | `ctl.py` | Small client for baresip's netstring/JSON control protocol |
 | `phone.py` | Container entry point: starts one baresip per account |
 | `Dockerfile` | Debian image with baresip and Python |

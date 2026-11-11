@@ -9,6 +9,7 @@ namespace Modules\ModuleStatusLookup\Lib;
 use DateTimeZone;
 use MikoPBX\Common\Models\PbxSettings;
 use MikoPBX\Common\Models\SoundFiles;
+use MikoPBX\Core\System\BeanstalkClient;
 use MikoPBX\Core\System\Directories;
 use MikoPBX\Core\System\SystemMessages;
 use MikoPBX\Core\Workers\Cron\WorkerSafeScriptsCore;
@@ -29,6 +30,14 @@ use Throwable;
 class StatusLookupConf extends ConfigClass
 {
     public const string MODULE_ID = 'ModuleStatusLookup';
+
+    /**
+     * Requests from the module's page to its worker: the web process has no
+     * AMI connection. Kept here, not on the worker class, so the page never
+     * loads the worker's file.
+     */
+    public const string COMMANDS_TUBE = 'ModuleStatusLookup-commands';
+    public const string COMMAND_TEST_CALL = 'test_call';
 
     /** The PBX's own default when PBXTimezone is not set. */
     private const string DEFAULT_TIMEZONE = 'Europe/Moscow';
@@ -60,6 +69,15 @@ class StatusLookupConf extends ConfigClass
                 'worker' => WorkerStatusLookup::class,
             ],
         ];
+    }
+
+    /**
+     * Asks the worker to place a test call: ring $extension, and when it
+     * answers, run the lookup line on it as a caller would hear it.
+     */
+    public static function requestTestCall(string $extension): void
+    {
+        (new BeanstalkClient(self::COMMANDS_TUBE))->publish(json_encode(['command' => self::COMMAND_TEST_CALL, 'extension' => $extension]));
     }
 
     /** Enabling a module doesn't reload the dialplan by itself. */

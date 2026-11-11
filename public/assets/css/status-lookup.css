@@ -229,3 +229,5 @@
 .sl-page .sl-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sl-space-6); }
 @media (max-width: 900px) { .sl-page .sl-two-col { grid-template-columns: 1fr; } }
 .sl-page tr.sl-test-call td { color: var(--sl-muted); }
+.sl-page .sl-test { margin-top: var(--sl-space-4); }
+.sl-page .sl-test .ui.dropdown { min-width: 16em; }

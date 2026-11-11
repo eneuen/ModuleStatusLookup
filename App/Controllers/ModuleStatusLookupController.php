@@ -97,6 +97,7 @@ class ModuleStatusLookupController extends BaseController
                 'soundFiles'     => PbxOptions::soundFiles($core),
                 'builtInPrompts' => $builtIn,
                 'destinations'   => PbxOptions::destinations($core, (string)$settings['internal_number']),
+                'extensions'     => PbxOptions::extensions($core),
                 'language'       => BuiltInPrompts::languageFor($language),
                 // Dates and times on the page are PBX time, as in the call records.
                 'timezone'       => StatusLookupConf::timezone()->getName(),
@@ -307,6 +308,20 @@ class ModuleStatusLookupController extends BaseController
             [$importer, $name] = $this->uploadedImport($db);
 
             return $importer->apply($db, (string)$this->request->getPost('mode'), $this->currentLogin(), $name, time());
+        });
+    }
+
+    /** POST testCall: extension. Asks the worker to ring it and run the line on it. */
+    public function testCallAction(): void
+    {
+        $this->write(function (): array {
+            $extension = (string)$this->request->getPost('extension');
+            if (!in_array($extension, array_column(PbxOptions::extensions($this->coreDb()), 'number'), true)) {
+                throw new EditorException('test_extension');
+            }
+            StatusLookupConf::requestTestCall($extension);
+
+            return ['extension' => $extension];
         });
     }
 

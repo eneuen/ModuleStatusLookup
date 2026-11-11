@@ -450,6 +450,21 @@ def miss_limit(p, c):
         p.configure()
 
 
+@scenario("The page's test call: the worker rings 302; answered, it runs the line, logged as a test call from 302.")
+def test_call(p, c):
+    import page_client
+    since, log_id = log_size(), p.last_log_id()
+    phone = Line("302")
+    c.that(page_client.post(p.pbx, "testCall", {"extension": "302"}).get("success"), "the page's test call is accepted")
+    c.that(rang(phone, 15), "302 rings")
+    phone.answer()
+    pause(3)
+    phone.keys("10445#")
+    c.that(wait_event(since, "lookup", timeout=15, result="hit") is not None, "lookup hit")
+    pause(2); phone.hangup(); pause(3)
+    check_row(c, p, log_id, outcome="hit", is_test=1, caller="302")
+
+
 @scenario("Not switched on: the line doesn't answer, so the route moves on; the call is still logged.")
 def inactive(p, c):
     p.configure(active="0")

@@ -103,6 +103,7 @@
     too_many_statuses: ["sl_Err_too_many_statuses", "Up to {max} statuses."],
     move_to: ["sl_Err_move_to", "Choose another status to move the records to."],
     status_in_use: ["sl_Err_status_in_use", "Records still have this status. Choose a status to move them to."],
+    test_extension: ["sl_Err_test_extension", "Choose an extension from the list."],
     range_dates: ["sl_Err_range_dates", "Choose a start date on or before the end date."],
     range_long: ["sl_Err_range_long", "Choose a period of up to {max} days."],
     number_in_use: ["sl_Err_number_in_use", 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.']
@@ -418,7 +419,7 @@
     );
     fill(
       box,
-      section(t("sl_SectionLine", "Lookup Line"), null, lineState(data)),
+      section(t("sl_SectionLine", "Lookup Line"), null, lineState(data), testCallRow(data)),
       section(t("sl_SectionNumber", "Where Callers Come From"), null, numberForm, usedBy(data)),
       form
     );
@@ -426,6 +427,28 @@
     $(box).find("select.ui.dropdown:not(.sl-prompt-select)").dropdown({ fullTextSearch: true, placeholder: false });
     form.addEventListener("input", markDirty);
     form.addEventListener("change", markDirty);
+  }
+  function testCallRow(data) {
+    const extensions = state.options.extensions || [];
+    if (!extensions.length || !data.settings.internal_number) return null;
+    const ext = select(
+      "sl-test-ext",
+      extensions.map((x) => [x.number, x.name ? `${x.name} (${x.number})` : x.number]),
+      extensions[0].number,
+      { class: "ui search dropdown", "aria-label": t("sl_TestExtension", "Extension") }
+    );
+    const button = el("button", { class: "ui basic button", type: "button", id: "sl-test-call", onclick: () => {
+      button.classList.add("loading");
+      post("testCall", { extension: ext.value }).then(() => {
+        $id("sl-test-note").textContent = sub(t("sl_TestCalling", "{ext} is ringing. Answer it to hear the line as a caller would."), { ext: ext.value });
+      }).fail((xhr) => showError(saveFailed(xhr))).always(() => button.classList.remove("loading"));
+    } }, el("i", { class: "phone icon" }), t("sl_TestCall", "Test Call"));
+    return el(
+      "div",
+      { class: "ui form sl-test" },
+      el("div", { class: "sl-inline" }, field(t("sl_TestTheLine", "Test the Line"), ext), button),
+      el("div", { class: "sl-note", id: "sl-test-note", text: data.answering ? t("sl_TestHint", "The extension rings; answering puts you through the line. Test calls are marked in the call log and left out of Activity.") : t("sl_TestOffHint", "The line isn't answering yet, so a test call ends at once.") })
+    );
   }
   function markDirty() {
     state.dirty = true;
@@ -1526,7 +1549,7 @@ ${x.script}\r
         "td",
         {},
         el("div", { text: outcomeText(r.outcome === "hit" && r.target ? "hit_person" : r.outcome) }),
-        r.is_test ? el("div", { class: "sl-sub-line", text: t("sl_TestCall", "Test call") }) : null
+        r.is_test ? el("div", { class: "sl-sub-line", text: t("sl_IsTestCall", "Test call") }) : null
       ),
       el("td", {}, r.status_code ? statusLabel(r.status_code) : "\u2014"),
       el("td", { text: r.target ? destinationName(r.target) : "\u2014" }),
