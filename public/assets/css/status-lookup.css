@@ -215,3 +215,17 @@
 .sl-page .sl-template-statuses { margin: var(--sl-space-2) 0; padding-left: 1.2em; color: var(--sl-text); font-size: .9em; flex: 1 1 auto; }
 .sl-page .sl-template-card .ui.button { margin: var(--sl-space-2) 0 0; align-self: flex-start; }
 .sl-page .sl-script { font-style: italic; max-width: 28em; }
+
+/* ---------------------------------------------------------------- activity */
+
+.sl-page .sl-range { display: flex; align-items: center; gap: var(--sl-space-2); }
+.sl-page .sl-toolbar input[type="date"] { width: auto; padding: .55em .7em; }
+.sl-page .sl-tiles.sl-tiles-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .sl-page .sl-tiles.sl-tiles-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sl-page .sl-tile-value.sl-empty { color: var(--sl-faint); font-weight: 400; }
+.sl-page .sl-change { font-size: .8rem; margin-top: var(--sl-space-1); color: var(--sl-muted); }
+.sl-page .sl-chart { width: 100%; height: 280px; }
+.sl-page .sl-chart-short { height: 240px; }
+.sl-page .sl-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sl-space-6); }
+@media (max-width: 900px) { .sl-page .sl-two-col { grid-template-columns: 1fr; } }
+.sl-page tr.sl-test-call td { color: var(--sl-muted); }

@@ -7,6 +7,7 @@
     "build": "node build/build.mjs"
   },
   "devDependencies": {
+    "echarts": "6.1.0",
     "esbuild": "0.28.2"
   }
 }

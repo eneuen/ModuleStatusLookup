@@ -103,6 +103,8 @@
     too_many_statuses: ["sl_Err_too_many_statuses", "Up to {max} statuses."],
     move_to: ["sl_Err_move_to", "Choose another status to move the records to."],
     status_in_use: ["sl_Err_status_in_use", "Records still have this status. Choose a status to move them to."],
+    range_dates: ["sl_Err_range_dates", "Choose a start date on or before the end date."],
+    range_long: ["sl_Err_range_long", "Choose a period of up to {max} days."],
     number_in_use: ["sl_Err_number_in_use", 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.']
   };
   function failText(xhr, fallback) {
@@ -746,7 +748,8 @@ ${x.script}\r
   var STATUS_COLOURS = ["blue", "teal", "green", "orange", "purple", "brown", "olive", "pink", "violet", "yellow", "grey"];
   var SOURCES = { form: ["sl_Source_form", "on this page"], csv: ["sl_Source_csv", "CSV import"], api: ["sl_Source_api", "API"] };
   var records = { query: { search: "", status: "", stale: "0", expired: "", page: 1 }, selected: /* @__PURE__ */ new Set(), data: null, timer: null };
-  var shortDateTime = (epoch) => epoch ? new Date(epoch * 1e3).toLocaleString(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "\u2014";
+  var pbxZone = () => state.options && state.options.timezone || void 0;
+  var shortDateTime = (epoch) => epoch ? new Date(epoch * 1e3).toLocaleString(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: pbxZone() }) : "\u2014";
   var isoText = (iso) => iso ? (/* @__PURE__ */ new Date(`${iso}T00:00:00`)).toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" }) : "";
   function statusLabel(code) {
     const index = (state.statuses || []).findIndex((s) => s.code === code);
@@ -1077,15 +1080,15 @@ ${x.script}\r
     );
   }
   function countTiles(p) {
-    const tile = (n, text, kind) => el("div", { class: `sl-tile ${kind || ""}` }, el("div", { class: "sl-tile-value", text: count(n) }), el("div", { class: "sl-tile-label", text }));
+    const tile2 = (n, text, kind) => el("div", { class: `sl-tile ${kind || ""}` }, el("div", { class: "sl-tile-value", text: count(n) }), el("div", { class: "sl-tile-label", text }));
     return el(
       "div",
       { class: "sl-tiles" },
-      tile(p.added, t("sl_WillAdd", "New")),
-      tile(p.updated, t("sl_WillUpdate", "Changed")),
-      tile(p.unchanged, t("sl_WillKeep", "Unchanged")),
-      tile(p.deleted, t("sl_WillDelete", "Deleted"), p.deleted ? "sl-tile-bad" : ""),
-      tile(p.rejected, t("sl_WillReject", "Left Out"), p.rejected ? "sl-tile-warn" : "")
+      tile2(p.added, t("sl_WillAdd", "New")),
+      tile2(p.updated, t("sl_WillUpdate", "Changed")),
+      tile2(p.unchanged, t("sl_WillKeep", "Unchanged")),
+      tile2(p.deleted, t("sl_WillDelete", "Deleted"), p.deleted ? "sl-tile-bad" : ""),
+      tile2(p.rejected, t("sl_WillReject", "Left Out"), p.rejected ? "sl-tile-warn" : "")
     );
   }
   function renderPreview() {
@@ -1278,13 +1281,325 @@ ${x.script}\r
     renderImport(null);
     loadImports();
   }
+  var SHADES = {
+    grey: ["#f5f7fa", "#e4e7eb", "#cbd2d9", "#9aa5b1", "#7b8794", "#616e7c", "#52606d", "#3e4c59", "#323f4b", "#1f2933"],
+    blue: ["#ebf4fc", "#cfe5f7", "#a5cdef", "#6eafe3", "#3d93d8", "#2185d0", "#1a6fb0", "#155a8f", "#10456e", "#0b3250"],
+    green: ["#e3f9e5", "#c1eac5", "#a3d9a5", "#7bc47f", "#57ae5b", "#3f9142", "#2f8132", "#207227", "#0e5814", "#05400a"]
+  };
+  var G = SHADES.grey;
+  var PALETTE = { calls: G[2], hits: SHADES.blue[5], deflected: SHADES.green[5] };
+  var themeReady = false;
+  function registerTheme() {
+    if (themeReady || typeof echarts === "undefined") return;
+    themeReady = true;
+    echarts.registerTheme("status-lookup", {
+      color: [PALETTE.hits, PALETTE.deflected, G[3]],
+      backgroundColor: "transparent",
+      textStyle: { color: G[7] },
+      legend: { textStyle: { color: G[7] }, inactiveColor: G[2] },
+      tooltip: { backgroundColor: "#fff", borderColor: G[2], borderWidth: 1, textStyle: { color: G[8] }, extraCssText: "box-shadow: 0 2px 8px rgba(31, 41, 51, .12);" },
+      categoryAxis: { axisLine: { lineStyle: { color: G[2] } }, axisTick: { show: false }, axisLabel: { color: G[6] }, splitLine: { lineStyle: { color: G[1] } } },
+      valueAxis: { axisLine: { show: false }, axisLabel: { color: G[6] }, splitLine: { lineStyle: { color: G[1] } } }
+    });
+  }
+  var OUTCOMES = {
+    hit: ["sl_Outcome_hit", "Heard their status, no person needed"],
+    hit_person: ["sl_Outcome_hit_person", "Heard their status, then put through"],
+    operator: ["sl_Outcome_operator", "Pressed 0 for a person"],
+    too_many: ["sl_Outcome_too_many", "Too many tries, put through"],
+    rate_limited: ["sl_Outcome_rate_limited", "Stopped by guessing protection"],
+    fault: ["sl_Outcome_fault", "Lookup failed, put through"],
+    abandoned: ["sl_Outcome_abandoned", "Hung up in the lookup"],
+    inactive: ["sl_Outcome_inactive", "Line was switched off"]
+  };
+  var outcomeText = (key) => OUTCOMES[key] ? label(OUTCOMES[key]) : key;
+  var activity = { charts: {}, outcome: "", page: 1 };
+  var esc = (v) => echarts.format.encodeHTML(String(v));
+  var shortDate = (iso) => (/* @__PURE__ */ new Date(`${iso}T00:00:00`)).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
+  var pct = (part, whole) => whole ? Math.round(part / whole * 100) : null;
+  function chart(id) {
+    registerTheme();
+    if (activity.charts[id] && activity.charts[id].getDom() !== $id(id)) {
+      activity.charts[id].dispose();
+      delete activity.charts[id];
+    }
+    if (!activity.charts[id]) activity.charts[id] = echarts.init($id(id), "status-lookup", { renderer: "canvas" });
+    return activity.charts[id];
+  }
+  var pbxToday = () => new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: pbxZone() }).format(/* @__PURE__ */ new Date());
+  function presetRange(days) {
+    const to = pbxToday();
+    const from = /* @__PURE__ */ new Date(`${to}T12:00:00Z`);
+    from.setUTCDate(from.getUTCDate() - (days - 1));
+    return [from.toISOString().slice(0, 10), to];
+  }
+  function activityToolbar() {
+    const preset = select("sl-act-preset", [
+      ["7", t("sl_Last7", "Last 7 Days")],
+      ["30", t("sl_Last30", "Last 30 Days")],
+      ["90", t("sl_Last90", "Last 90 Days")],
+      ["365", t("sl_Last365", "Last 365 Days")],
+      ["custom", t("sl_Custom", "Custom")]
+    ], activity.preset || "30", { class: "ui dropdown", "aria-label": t("sl_Period", "Period") });
+    const from = el("input", { type: "date", id: "sl-act-from", value: activity.from, "aria-label": t("sl_From", "From") });
+    const to = el("input", { type: "date", id: "sl-act-to", value: activity.to, "aria-label": t("sl_To", "To") });
+    preset.addEventListener("change", () => {
+      activity.preset = preset.value;
+      if (preset.value === "custom") return;
+      [activity.from, activity.to] = presetRange(Number(preset.value));
+      from.value = activity.from;
+      to.value = activity.to;
+      loadActivity();
+    });
+    [from, to].forEach((input) => input.addEventListener("change", () => {
+      activity.preset = "custom";
+      $(preset).dropdown("set selected", "custom");
+      activity.from = from.value;
+      activity.to = to.value;
+      loadActivity();
+    }));
+    return el("div", { class: "ui form sl-toolbar" }, preset, el("div", { class: "sl-range" }, from, el("span", { class: "sl-muted", text: "\u2013" }), to));
+  }
+  function tile(labelText, value, sub2, change) {
+    return el(
+      "div",
+      { class: "sl-tile" },
+      el("div", { class: "sl-tile-label", text: labelText }),
+      el("div", { class: `sl-tile-value${value === null ? " sl-empty" : ""}`, text: value === null ? "\u2014" : value }),
+      sub2 ? el("div", { class: "sl-sub-line", text: sub2 }) : null,
+      change
+    );
+  }
+  function changeLine(cur, prev) {
+    if (prev === null || cur === null || prev === void 0) return null;
+    const diff = cur - prev;
+    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangeVs", "{diff} on the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${count(Math.abs(diff))}` });
+    return el("div", { class: "sl-change", text });
+  }
+  function changePoints(cur, prev) {
+    if (cur === null || prev === null) return null;
+    const diff = cur - prev;
+    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangePoints", "{diff} points on the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${Math.abs(diff)}` });
+    return el("div", { class: "sl-change", text });
+  }
+  function renderActivity(a) {
+    const tot = a.totals;
+    const prev = a.previous;
+    const rate = pct(tot.deflected, tot.calls);
+    const prevRate = pct(prev.deflected, prev.calls);
+    const box = $id("sl-activity-body");
+    if (!tot.calls) {
+      fill(box, el("div", { class: "ui message" }, el("p", { text: t("sl_NoCalls", "No calls to the lookup line in this period.") })));
+      renderCallLog();
+      return;
+    }
+    fill(
+      box,
+      el(
+        "div",
+        { class: "sl-tiles sl-tiles-4" },
+        tile(t("sl_TileCalls", "Calls"), count(tot.calls), null, changeLine(tot.calls, prev.calls)),
+        tile(t("sl_TileHeard", "Heard Their Status"), count(tot.hits), sub(t("sl_OfCalls", "{pct}% of calls"), { pct: pct(tot.hits, tot.calls) }), changeLine(tot.hits, prev.hits)),
+        tile(t("sl_TileDeflected", "Needed No Person"), rate === null ? null : `${rate}%`, plural("sl_CallsCount", tot.deflected, { one: "{n} call", other: "{n} calls" }), changePoints(rate, prevRate)),
+        tile(t("sl_TileToPerson", "Put Through to a Person"), count(tot.to_person), sub(t("sl_OfCalls", "{pct}% of calls"), { pct: pct(tot.to_person, tot.calls) }), changeLine(tot.to_person, prev.to_person))
+      ),
+      el("div", { class: "sl-note", text: t("sl_DeflectedNote", '"Needed no person" means the caller heard a status and the call ended without reaching anyone. Callers who hang up during the greeting count as calls, not as statuses heard.') }),
+      el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_ByDay", "Calls by Day") })),
+      el("div", { class: "sl-chart", id: "sl-chart-trend" }),
+      el(
+        "div",
+        { class: "sl-two-col" },
+        el(
+          "div",
+          {},
+          el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_HowCallsEnded", "How Calls Ended") })),
+          el("div", { class: "sl-chart sl-chart-short", id: "sl-chart-outcomes" })
+        ),
+        el(
+          "div",
+          {},
+          el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_BusiestHours", "Busiest Hours") })),
+          el("div", { class: "sl-chart sl-chart-short", id: "sl-chart-hours" })
+        )
+      ),
+      notFoundTable(a.notFound)
+    );
+    renderTrend(a.trend);
+    renderOutcomes(a.outcomes);
+    renderHours(a.hours);
+  }
+  function renderTrend(points) {
+    const c = chart("sl-chart-trend");
+    const names = [t("sl_TileCalls", "Calls"), t("sl_TileHeard", "Heard Their Status"), t("sl_TileDeflected", "Needed No Person")];
+    c.setOption({
+      grid: { left: 40, right: 16, top: 36, bottom: 28 },
+      legend: { data: names, top: 0, right: 0, icon: "roundRect", itemWidth: 12, itemHeight: 8 },
+      tooltip: {
+        trigger: "axis",
+        formatter: (params) => {
+          const p = points[params[0].dataIndex];
+          return `${esc(shortDate(p.day))}<br>${esc(names[0])}: <b>${esc(count(p.calls))}</b><br>${esc(names[1])}: ${esc(count(p.hits))}<br>${esc(names[2])}: ${esc(count(p.deflected))}`;
+        }
+      },
+      xAxis: { type: "category", data: points.map((p) => shortDate(p.day)) },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [
+        { name: names[0], type: "bar", barMaxWidth: 28, data: points.map((p) => p.calls), itemStyle: { color: PALETTE.calls, borderRadius: [2, 2, 0, 0] } },
+        { name: names[1], type: "line", symbol: "circle", symbolSize: 6, data: points.map((p) => p.hits), lineStyle: { color: PALETTE.hits, width: 2 }, itemStyle: { color: PALETTE.hits } },
+        { name: names[2], type: "line", symbol: "circle", symbolSize: 6, data: points.map((p) => p.deflected), lineStyle: { color: PALETTE.deflected, width: 2 }, itemStyle: { color: PALETTE.deflected } }
+      ]
+    }, true);
+  }
+  function renderOutcomes(outcomes) {
+    const c = chart("sl-chart-outcomes");
+    const rows = [...outcomes].reverse();
+    const colour = (k) => k === "hit" ? PALETTE.deflected : k === "hit_person" ? PALETTE.hits : G[4];
+    c.setOption({
+      grid: { left: 8, right: 40, top: 8, bottom: 8, containLabel: true },
+      tooltip: { trigger: "item", formatter: (p) => `${esc(outcomeText(rows[p.dataIndex].outcome))}: <b>${esc(count(p.value))}</b>` },
+      xAxis: { type: "value", minInterval: 1, show: false },
+      yAxis: { type: "category", data: rows.map((r) => outcomeText(r.outcome)), axisLabel: { width: 220, overflow: "truncate" } },
+      series: [{
+        type: "bar",
+        barMaxWidth: 18,
+        data: rows.map((r) => ({ value: r.calls, itemStyle: { color: colour(r.outcome), borderRadius: [0, 2, 2, 0] } })),
+        label: { show: true, position: "right", color: G[7], formatter: (p) => count(p.value) }
+      }]
+    }, true);
+  }
+  function renderHours(hours) {
+    const c = chart("sl-chart-hours");
+    c.setOption({
+      grid: { left: 32, right: 8, top: 8, bottom: 24 },
+      tooltip: { trigger: "axis", formatter: (params) => `${esc(`${params[0].dataIndex}:00\u2013${params[0].dataIndex}:59`)}: <b>${esc(count(params[0].value))}</b>` },
+      xAxis: { type: "category", data: hours.map((_, h) => String(h)), axisLabel: { interval: 2 } },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{ type: "bar", data: hours, barMaxWidth: 14, itemStyle: { color: PALETTE.hits, borderRadius: [2, 2, 0, 0] } }]
+    }, true);
+  }
+  function notFoundTable(ids) {
+    return el(
+      "div",
+      {},
+      el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_TopNotFound", "IDs Most Often Not Found") })),
+      el("div", { class: "sl-note sl-narrow", text: t("sl_TopNotFoundHint", "Callers typed these, and they weren't found or had expired. A record that is missing or out of date is the usual reason.") }),
+      ids.length ? el(
+        "table",
+        { class: "ui very basic compact table sl-table sl-narrow" },
+        el("thead", {}, el("tr", {}, el("th", { text: t("sl_ColId", "ID") }), el("th", { class: "sl-num", text: t("sl_TileCalls", "Calls") }), el("th", {}))),
+        el("tbody", {}, ids.map((x) => el(
+          "tr",
+          {},
+          el("td", { class: "sl-code", text: x.id }),
+          el("td", { class: "sl-num", text: count(x.calls) }),
+          el("td", { class: "sl-actions-cell" }, el("button", { class: "ui basic button", type: "button", onclick: () => findRecord(x.id) }, t("sl_FindInRecords", "Find in Records")))
+        )))
+      ) : el("div", { class: "sl-muted", text: t("sl_NoneNotFound", "None in this period.") })
+    );
+  }
+  function findRecord(id) {
+    records.query = { search: id, status: "", stale: "0", expired: "", page: 1 };
+    selectTab("records");
+  }
+  function renderCallLog() {
+    const d = activity.log;
+    const box = $id("sl-calllog");
+    if (!d) return;
+    const filter = select(
+      "sl-log-outcome",
+      [["", t("sl_AllOutcomes", "All Calls")], ...Object.keys(OUTCOMES).filter((k) => k !== "hit_person").map((k) => [k, outcomeText(k)])],
+      activity.outcome,
+      { class: "ui dropdown", "aria-label": t("sl_HowCallsEnded", "How Calls Ended") }
+    );
+    filter.addEventListener("change", () => {
+      activity.outcome = filter.value;
+      activity.page = 1;
+      loadCallLog();
+    });
+    const rows = d.rows.map((r) => el(
+      "tr",
+      { class: r.is_test ? "sl-test-call" : "" },
+      el("td", { class: "sl-nowrap", text: shortDateTime(r.started_at) }),
+      el("td", { class: "sl-code", text: r.caller || t("sl_Withheld", "Withheld") }),
+      el("td", { class: "sl-code", text: r.id_entered || "\u2014" }),
+      el(
+        "td",
+        {},
+        el("div", { text: outcomeText(r.outcome === "hit" && r.target ? "hit_person" : r.outcome) }),
+        r.is_test ? el("div", { class: "sl-sub-line", text: t("sl_TestCall", "Test call") }) : null
+      ),
+      el("td", {}, r.status_code ? statusLabel(r.status_code) : "\u2014"),
+      el("td", { text: r.target ? destinationName(r.target) : "\u2014" }),
+      el("td", { class: "sl-num", text: plural("sl_Tries", r.tries, { one: "{n} try", other: "{n} tries" }) }),
+      el("td", { class: "sl-num", text: `${count(r.seconds)} s` })
+    ));
+    fill(
+      box,
+      el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_CallLog", "Call Log") }), el("div", { class: "sl-section-actions" }, filter)),
+      d.rows.length ? el(
+        "table",
+        { class: "ui very basic table sl-table" },
+        el("thead", {}, el(
+          "tr",
+          {},
+          el("th", { text: t("sl_ColWhen", "When") }),
+          el("th", { text: t("sl_ColCaller", "Caller") }),
+          el("th", { text: t("sl_ColIdEntered", "ID Typed") }),
+          el("th", { text: t("sl_ColResult", "How It Ended") }),
+          el("th", { text: t("sl_ColStatus", "Status") }),
+          el("th", { text: t("sl_ColSentTo", "Sent To") }),
+          el("th", { class: "sl-num", text: t("sl_ColTries", "Tries") }),
+          el("th", { class: "sl-num", text: t("sl_ColLength", "Length") })
+        )),
+        el("tbody", {}, rows)
+      ) : el("div", { class: "sl-muted", text: t("sl_NoLogCalls", "No calls.") }),
+      d.pages > 1 ? el(
+        "div",
+        { class: "sl-pager" },
+        el("button", { class: "ui basic button", type: "button", disabled: d.page <= 1, onclick: () => {
+          activity.page = d.page - 1;
+          loadCallLog();
+        } }, t("sl_Previous", "Previous")),
+        el("span", { text: sub(t("sl_PageOf", "Page {page} of {pages}"), { page: count(d.page), pages: count(d.pages) }) }),
+        el("button", { class: "ui basic button", type: "button", disabled: d.page >= d.pages, onclick: () => {
+          activity.page = d.page + 1;
+          loadCallLog();
+        } }, t("sl_Next", "Next"))
+      ) : null
+    );
+    $(filter).dropdown({ placeholder: false });
+  }
+  function loadCallLog() {
+    return get("callLog", { from: activity.from, to: activity.to, outcome: activity.outcome, page: activity.page }).then((d) => {
+      activity.log = d;
+      renderCallLog();
+    });
+  }
+  function loadActivity() {
+    clearError();
+    activity.page = 1;
+    get("activity", { from: activity.from, to: activity.to }).then(renderActivity);
+    loadCallLog();
+  }
+  function loadActivityTab() {
+    if (!activity.from) {
+      activity.preset = "30";
+      [activity.from, activity.to] = presetRange(30);
+    }
+    fill($id("sl-activity"), activityToolbar(), el("div", { id: "sl-activity-body" }, el("div", { class: "ui active centered inline loader" })), el("div", { id: "sl-calllog" }));
+    $("#sl-act-preset").dropdown({ placeholder: false });
+    const ready = state.statuses ? $.Deferred().resolve() : get("statuses").then((d) => {
+      state.statuses = d.statuses;
+    });
+    ready.then(loadActivity);
+  }
   function updateTabsOverflow() {
     const tabs = $id("sl-tabs");
     const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
     tabs.classList.toggle("sl-overflow", overflow);
     tabs.classList.toggle("sl-at-end", overflow && tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
   }
-  var TABS = { records: loadRecordsTab, import: loadImportTab, statuses: loadStatuses, callflow: loadCallFlow };
+  var TABS = { records: loadRecordsTab, import: loadImportTab, activity: loadActivityTab, statuses: loadStatuses, callflow: loadCallFlow };
   function selectTab(tab) {
     if (state.tab === "callflow" && tab !== "callflow" && state.dirty) {
       confirmDialog(t("sl_LeaveTitle", "Leave Without Saving?"), t("sl_LeaveText", "Your changes to the call flow will be lost."), t("sl_Leave", "Leave")).then((ok) => {
@@ -1304,7 +1619,10 @@ ${x.script}\r
   function init() {
     document.querySelectorAll("#sl-tabs .item").forEach((a) => a.addEventListener("click", () => selectTab(a.dataset.tab)));
     $id("sl-tabs").addEventListener("scroll", updateTabsOverflow);
-    window.addEventListener("resize", updateTabsOverflow);
+    window.addEventListener("resize", () => {
+      updateTabsOverflow();
+      Object.values(activity.charts).forEach((c) => c.resize());
+    });
     window.addEventListener("beforeunload", (e) => {
       if (state.dirty) {
         e.preventDefault();

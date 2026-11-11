@@ -14,6 +14,7 @@ use MikoPBX\Core\System\SystemMessages;
 use MikoPBX\Core\Workers\Libs\WorkerModelsEvents\Actions\ReloadDialplanAction;
 use MikoPBX\Core\Workers\WorkerModelsEvents;
 use Modules\ModuleStatusLookup\Lib\AccessPolicy;
+use Modules\ModuleStatusLookup\Lib\Activity;
 use Modules\ModuleStatusLookup\Lib\BuiltInPrompts;
 use Modules\ModuleStatusLookup\Lib\CallFlowEditor;
 use Modules\ModuleStatusLookup\Lib\CoreNumber;
@@ -75,6 +76,7 @@ class ModuleStatusLookupController extends BaseController
         $this->assets->collection(AssetProvider::HEADER_CSS)
             ->addCss('css/cache/' . StatusLookupConf::MODULE_ID . '/status-lookup.css', true);
         $this->assets->collection(AssetProvider::FOOTER_JS)
+            ->addJs('js/cache/' . StatusLookupConf::MODULE_ID . '/vendor/echarts.min.js', true)
             ->addJs('js/cache/' . StatusLookupConf::MODULE_ID . '/status-lookup.js', true);
     }
 
@@ -96,6 +98,8 @@ class ModuleStatusLookupController extends BaseController
                 'builtInPrompts' => $builtIn,
                 'destinations'   => PbxOptions::destinations($core, (string)$settings['internal_number']),
                 'language'       => BuiltInPrompts::languageFor($language),
+                // Dates and times on the page are PBX time, as in the call records.
+                'timezone'       => StatusLookupConf::timezone()->getName(),
             ];
         });
     }
@@ -266,6 +270,19 @@ class ModuleStatusLookupController extends BaseController
         $this->response->setContent($csv);
     }
 
+    /** GET activity: from, to (YYYY-MM-DD, PBX days). */
+    public function activityAction(): void
+    {
+        $this->json(fn (): array => $this->activity()->summary((string)$this->request->getQuery('from'), (string)$this->request->getQuery('to')));
+    }
+
+    /** GET callLog: from, to, outcome ('' for all), page. */
+    public function callLogAction(): void
+    {
+        $this->json(fn (): array => $this->activity()->log((string)$this->request->getQuery('from'), (string)$this->request->getQuery('to'),
+            (string)$this->request->getQuery('outcome'), $this->request->getQuery('page')));
+    }
+
     /** GET imports: the import history, newest first. */
     public function importsAction(): void
     {
@@ -349,6 +366,11 @@ class ModuleStatusLookupController extends BaseController
         $statuses = $db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN);
 
         return [new Importer($csv, Lookup::idLengths(Settings::load($db)), array_map('strval', $statuses)), (string)$file->getName()];
+    }
+
+    private function activity(): Activity
+    {
+        return new Activity($this->moduleDb(), StatusLookupConf::timezone());
     }
 
     private function templates(): Templates

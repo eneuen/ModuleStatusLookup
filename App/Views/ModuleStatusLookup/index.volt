@@ -10,6 +10,7 @@
     <div class="ui top attached tabular menu" id="sl-tabs">
         <a class="item" data-tab="records">{{ t._('sl_TabRecords')|e }}</a>
         <a class="item" data-tab="import">{{ t._('sl_TabImport')|e }}</a>
+        <a class="item" data-tab="activity">{{ t._('sl_TabActivity')|e }}</a>
         <a class="item" data-tab="statuses">{{ t._('sl_TabStatuses')|e }}</a>
         <div class="right menu">
             <a class="item" data-tab="callflow"><i class="cog icon"></i>{{ t._('sl_TabCallFlow')|e }}</a>
@@ -22,6 +23,10 @@
 
     <div class="ui bottom attached tab segment" data-tab="import">
         <div id="sl-import"></div>
+    </div>
+
+    <div class="ui bottom attached tab segment" data-tab="activity">
+        <div id="sl-activity"></div>
     </div>
 
     <div class="ui bottom attached tab segment" data-tab="statuses">
