@@ -29,6 +29,8 @@ final class StatusEditor
 
     public const int MAX_STATUSES = 50;
 
+    public const int MAX_SCRIPT = 300;
+
     /**
      * @param callable(int): bool $promptUsable Whether a PBX sound file ID can be played.
      * @param list<string> $destinations The numbers callers may be sent to.
@@ -44,7 +46,7 @@ final class StatusEditor
      */
     public function list(): array
     {
-        $rows = $this->db->query('SELECT s.id, s.code, s.name, s.prompt_id, s.spoken_extra, s.after_action, s.transfer_number,
+        $rows = $this->db->query('SELECT s.id, s.code, s.name, s.script, s.prompt_id, s.spoken_extra, s.after_action, s.transfer_number,
                 s.sort_order, (SELECT COUNT(*) FROM m_StatusLookupRecords r WHERE r.status_code = s.code) AS records
             FROM m_StatusLookupStatuses s ORDER BY s.sort_order, s.id')->fetchAll(PDO::FETCH_ASSOC);
 
@@ -52,6 +54,7 @@ final class StatusEditor
             'id'              => (int)$r['id'],
             'code'            => (string)$r['code'],
             'name'            => (string)$r['name'],
+            'script'          => (string)$r['script'],
             'prompt_id'       => $r['prompt_id'] === null ? null : (int)$r['prompt_id'],
             'spoken_extra'    => (string)$r['spoken_extra'],
             'after_action'    => (string)$r['after_action'],
@@ -87,13 +90,13 @@ final class StatusEditor
                     throw new EditorException('too_many_statuses', ['max' => self::MAX_STATUSES]);
                 }
                 $order = (int)$this->db->query('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM m_StatusLookupStatuses')->fetchColumn();
-                $this->db->prepare('INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, transfer_number,
-                        requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, ?, ?, ?, \'0\', \'0\', ?)')
+                $this->db->prepare('INSERT INTO m_StatusLookupStatuses (code, name, script, prompt_id, spoken_extra, after_action, transfer_number,
+                        requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, \'0\', \'0\', ?)')
                     ->execute([...array_values($values), $order]);
 
                 return (int)$this->db->lastInsertId();
             }
-            $this->db->prepare('UPDATE m_StatusLookupStatuses SET code = ?, name = ?, prompt_id = ?, spoken_extra = ?, after_action = ?,
+            $this->db->prepare('UPDATE m_StatusLookupStatuses SET code = ?, name = ?, script = ?, prompt_id = ?, spoken_extra = ?, after_action = ?,
                     transfer_number = ? WHERE id = ?')->execute([...array_values($values), $id]);
             if ($existing['code'] !== $values['code']) {
                 $this->db->prepare('UPDATE m_StatusLookupRecords SET status_code = ? WHERE status_code = ?')
@@ -172,7 +175,7 @@ final class StatusEditor
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{code: string, name: string, prompt_id: int, spoken_extra: string, after_action: string, transfer_number: string}
+     * @return array{code: string, name: string, script: string, prompt_id: int, spoken_extra: string, after_action: string, transfer_number: string}
      *
      * @throws EditorException
      */
@@ -185,6 +188,10 @@ final class StatusEditor
         $name = is_string($input['name'] ?? null) ? trim((string)preg_replace('/\s+/u', ' ', $input['name'])) : '';
         if ($name === '' || mb_strlen($name) > self::MAX_NAME || preg_match('/[\x00-\x1F\x7F]/', $name) === 1) {
             throw new EditorException('name', ['max' => self::MAX_NAME]);
+        }
+        $script = is_string($input['script'] ?? null) ? trim((string)preg_replace('/\s+/u', ' ', $input['script'])) : '';
+        if (mb_strlen($script) > self::MAX_SCRIPT || preg_match('/[\x00-\x1F\x7F]/', $script) === 1) {
+            throw new EditorException('script', ['max' => self::MAX_SCRIPT]);
         }
         $prompt = $input['prompt_id'] ?? null;
         $promptId = is_int($prompt) || (is_string($prompt) && preg_match('/^[1-9][0-9]{0,8}\z/', $prompt) === 1) ? (int)$prompt : 0;
@@ -207,7 +214,7 @@ final class StatusEditor
             }
         }
 
-        return ['code' => $code, 'name' => $name, 'prompt_id' => $promptId, 'spoken_extra' => $extra,
+        return ['code' => $code, 'name' => $name, 'script' => $script, 'prompt_id' => $promptId, 'spoken_extra' => $extra,
             'after_action' => $action, 'transfer_number' => $transfer];
     }
 

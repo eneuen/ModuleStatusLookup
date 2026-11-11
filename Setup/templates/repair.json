@@ -1,0 +1,21 @@
+{
+  "key": "repair",
+  "order": 1,
+  "name": { "en": "IT and Device Repair", "ru": "Ремонт техники" },
+  "description": { "en": "Callers enter their repair ticket number.", "ru": "Звонящий вводит номер квитанции на ремонт." },
+  "id_length": [4, 6],
+  "statuses": [
+    { "code": "RECEIVED", "name": { "en": "Received", "ru": "Принято" }, "extra": "none", "after": "repeat",
+      "script": { "en": "Your device has been received and is waiting for diagnosis.", "ru": "Ваше устройство принято и ожидает диагностики." } },
+    { "code": "DIAGNOSING", "name": { "en": "Diagnosing", "ru": "Диагностика" }, "extra": "none", "after": "repeat",
+      "script": { "en": "Your device is being checked.", "ru": "Ваше устройство на диагностике." } },
+    { "code": "PARTS", "name": { "en": "Waiting for parts", "ru": "Ожидание запчастей" }, "extra": "none", "after": "repeat",
+      "script": { "en": "We are waiting for parts for your repair.", "ru": "Мы ожидаем запчасти для ремонта." } },
+    { "code": "REPAIRING", "name": { "en": "Being repaired", "ru": "В ремонте" }, "extra": "none", "after": "repeat",
+      "script": { "en": "Your device is being repaired.", "ru": "Ваше устройство в ремонте." } },
+    { "code": "READY", "name": { "en": "Ready for pickup", "ru": "Готово к выдаче" }, "extra": "none", "after": "repeat",
+      "script": { "en": "Your device is ready for pickup.", "ru": "Ваше устройство готово, его можно забрать." } },
+    { "code": "CANNOT_REPAIR", "name": { "en": "Can't be repaired", "ru": "Ремонт невозможен" }, "extra": "none", "after": "person",
+      "script": { "en": "Please speak to us about your repair.", "ru": "Пожалуйста, обсудите ремонт с нашим сотрудником." } }
+  ]
+}

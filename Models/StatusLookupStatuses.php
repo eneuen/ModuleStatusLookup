@@ -45,6 +45,14 @@ class StatusLookupStatuses extends ModulesModelsBase
     public $name = '';
 
     /**
+     * The sentence's wording, for whoever records it (staff only); filled
+     * from a template.
+     *
+     * @Column(type="string", nullable=true)
+     */
+    public $script = '';
+
+    /**
      * The PBX sound file with the status sentence.
      *
      * @Column(type="integer", nullable=true)

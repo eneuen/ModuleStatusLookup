@@ -201,3 +201,17 @@
 #sl-confirm-modal table.sl-table thead th { color: var(--sl-muted); font-size: .85rem; background: transparent; }
 #sl-confirm-modal .sl-num { text-align: right; }
 #sl-confirm-modal .sl-code { font-family: SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---------------------------------------------------------------- templates */
+
+.sl-page .sl-templates { margin: var(--sl-space-4) 0 var(--sl-space-6); }
+.sl-page .sl-templates > .ui.header { font-size: 1rem; margin-bottom: var(--sl-space-1); }
+.sl-page .sl-template-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--sl-space-3); margin-top: var(--sl-space-4); }
+.sl-page .sl-template-card {
+    border: 1px solid var(--sl-border); border-radius: 6px; padding: var(--sl-space-4); background: #fff;
+    display: flex; flex-direction: column; gap: var(--sl-space-1);
+}
+.sl-page .sl-template-name { font-weight: 700; color: var(--sl-text); }
+.sl-page .sl-template-statuses { margin: var(--sl-space-2) 0; padding-left: 1.2em; color: var(--sl-text); font-size: .9em; flex: 1 1 auto; }
+.sl-page .sl-template-card .ui.button { margin: var(--sl-space-2) 0 0; align-self: flex-start; }
+.sl-page .sl-script { font-style: italic; max-width: 28em; }

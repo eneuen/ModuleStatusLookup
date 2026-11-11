@@ -28,6 +28,7 @@ use Modules\ModuleStatusLookup\Lib\RecordEditor;
 use Modules\ModuleStatusLookup\Lib\Settings;
 use Modules\ModuleStatusLookup\Lib\StatusEditor;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
+use Modules\ModuleStatusLookup\Lib\Templates;
 use PDO;
 use Phalcon\Mvc\Dispatcher;
 use RuntimeException;
@@ -150,10 +151,30 @@ class ModuleStatusLookupController extends BaseController
         }, true);
     }
 
-    /** GET statuses: every status in order, with its record count. */
+    /** GET statuses: every status in order, with its record count, and the business templates. */
     public function statusesAction(): void
     {
-        $this->json(fn (): array => ['statuses' => $this->statusEditor($this->moduleDb())->list()]);
+        $this->json(function (): array {
+            $db = $this->moduleDb();
+
+            return [
+                'statuses'  => $this->statusEditor($db)->list(),
+                'templates' => $this->templates()->all(StatusLookupConf::language()),
+                'template'  => (string)Settings::load($db)['template'],
+            ];
+        });
+    }
+
+    /** POST applyTemplate: key. Adds the template's statuses the line doesn't have yet. */
+    public function applyTemplateAction(): void
+    {
+        $this->write(function (): array {
+            $db = $this->writableModuleDb();
+            $result = $this->templates()->apply($db, (string)$this->request->getPost('key'), StatusLookupConf::language(),
+                (string)Settings::load($db)['operator_number']);
+
+            return $result + ['statuses' => $this->statusEditor($db)->list()];
+        });
     }
 
     /** POST saveStatus: status (JSON object; with id to change one). Read at call time: no reload. */
@@ -328,6 +349,11 @@ class ModuleStatusLookupController extends BaseController
         $statuses = $db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN);
 
         return [new Importer($csv, Lookup::idLengths(Settings::load($db)), array_map('strval', $statuses)), (string)$file->getName()];
+    }
+
+    private function templates(): Templates
+    {
+        return new Templates(dirname(StatusLookupConf::moduleDbFile(), 2) . '/Setup/templates');
     }
 
     private function recordEditor(PDO $db): RecordEditor

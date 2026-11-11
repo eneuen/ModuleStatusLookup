@@ -92,6 +92,8 @@
     note: ["sl_Err_note", "Keep the note to {max} characters."],
     date: ["sl_Err_date", 'Enter a valid date for "{field}".'],
     bulk: ["sl_Err_bulk", "Choose 1 to {max} records."],
+    template: ["sl_Err_template", "This template can't be used. Reload the page."],
+    script: ["sl_Err_script", "Keep the wording to {max} characters."],
     status_gone: ["sl_Err_status_gone", "This status no longer exists. Reload the page."],
     code_format: ["sl_Err_code_format", "Use 1 to 32 capital letters, digits and _ for the code, such as READY."],
     code_taken: ["sl_Err_code_taken", "Another status already has the code {code}."],
@@ -513,7 +515,8 @@
     return s.after_action === "transfer" ? `${label(ACTIONS.transfer)}: ${destinationName(s.transfer_number)}` : label(ACTIONS[s.after_action] || ACTIONS.repeat);
   }
   function statusRow(s, index, all) {
-    const name = soundName(s.prompt_id);
+    const name = s.prompt_id ? soundName(s.prompt_id) : null;
+    const missing = s.prompt_id ? el("span", { class: "sl-warn-text", text: t("sl_PromptGone", "Sound file missing: choose another") }) : el("span", { class: "sl-warn-text", text: t("sl_NotRecorded", "Not recorded yet") });
     const listen = iconButton("play", t("sl_Listen", "Listen"), (e) => togglePreview(promptFile(s.prompt_id), e.currentTarget));
     return el(
       "tr",
@@ -528,12 +531,8 @@
       el(
         "td",
         {},
-        el(
-          "div",
-          { class: "sl-prompt-cell" },
-          name ? listen : null,
-          el("span", { class: name ? "" : "sl-warn-text", text: name || t("sl_PromptGone", "Sound file missing: choose another") })
-        ),
+        el("div", { class: "sl-prompt-cell" }, name ? listen : null, name ? el("span", { text: name }) : missing),
+        !name && s.script ? el("div", { class: "sl-sub-line sl-script", text: `\u201C${s.script}\u201D` }) : null,
         s.spoken_extra !== "none" ? el("div", { class: "sl-sub-line", text: `+ ${label(EXTRAS[s.spoken_extra])}` }) : null
       ),
       s.after_action === "transfer" && !state.options.destinations.some((d) => d.value === s.transfer_number) ? el("td", { class: "sl-warn-text", text: sub(t("sl_TransferGone", "Put through to {number}, which no longer exists: choose another"), { number: s.transfer_number }) }) : el("td", { text: afterText(s) }),
@@ -546,9 +545,45 @@
       )
     );
   }
+  function templatePicker(firstRun) {
+    return el(
+      "div",
+      { class: "sl-templates" },
+      el("h4", { class: "ui header", text: firstRun ? t("sl_FirstRunTitle", "What kind of business is this?") : t("sl_AddFromTemplateTitle", "Add Statuses from a Template") }),
+      el("div", { class: "sl-note sl-narrow", text: firstRun ? t("sl_FirstRunHint", "A template adds the statuses that business usually needs, with the wording to record for each, and sets how long IDs are. Everything can be changed afterwards.") : t("sl_AddFromTemplateHint", "Only statuses you don't have yet (by code) are added; nothing is changed or deleted.") }),
+      el("div", { class: "sl-template-cards" }, state.templates.map((tpl) => el(
+        "div",
+        { class: "sl-template-card" },
+        el("div", { class: "sl-template-name", text: tpl.name }),
+        el("div", { class: "sl-sub-line", text: tpl.description }),
+        el("div", { class: "sl-sub-line", text: tpl.id_length[0] === tpl.id_length[1] ? plural("sl_TemplateIdExact", tpl.id_length[0], { one: "IDs of {n} digit", other: "IDs of {n} digits" }) : sub(t("sl_TemplateIdLength", "IDs of {min}\u2013{max} digits"), { min: tpl.id_length[0], max: tpl.id_length[1] }) }),
+        tpl.statuses.length ? el("ul", { class: "sl-template-statuses" }, tpl.statuses.map((x) => el("li", { text: x.name }))) : null,
+        el("button", { class: "ui basic button", type: "button", onclick: () => applyTemplate(tpl) }, t("sl_UseTemplate", "Use This Template"))
+      )))
+    );
+  }
+  function applyTemplate(tpl) {
+    post("applyTemplate", { key: tpl.key }).then((d) => {
+      state.showTemplates = false;
+      state.template = state.template || tpl.key;
+      renderStatuses(d.statuses);
+      if (d.added.length) {
+        $id("sl-statuses").prepend(el("div", { class: "ui positive message" }, el("p", {
+          text: plural("sl_TemplateAdded", d.added.length, { one: "{n} status added. Record its sentence and choose it with Edit.", other: "{n} statuses added. Record each sentence and choose it with Edit; Download Wording lists what to record." })
+        })));
+      }
+    }).fail((xhr) => showError(saveFailed(xhr)));
+  }
+  function downloadWording() {
+    const lines = state.statuses.filter((x) => x.script).map((x) => `${x.name} (${x.code})\r
+${x.script}\r
+`);
+    download("status-lookup-wording.txt", new Blob([lines.join("\r\n")], { type: "text/plain" }));
+  }
   function renderStatuses(statuses) {
     state.statuses = statuses;
     const box = $id("sl-statuses");
+    const firstRun = !statuses.length && !state.template;
     const head = el(
       "div",
       { class: "sl-section-head" },
@@ -556,12 +591,31 @@
       el(
         "div",
         { class: "sl-section-actions" },
+        statuses.some((x) => x.script && !x.prompt_id) ? el(
+          "button",
+          { class: "ui basic button", type: "button", onclick: downloadWording },
+          el("i", { class: "download icon" }),
+          t("sl_DownloadWording", "Download Wording")
+        ) : null,
+        !firstRun ? el(
+          "button",
+          { class: "ui basic button", type: "button", onclick: () => {
+            state.showTemplates = !state.showTemplates;
+            renderStatuses(state.statuses);
+          } },
+          t("sl_AddFromTemplate", "Add from Template\u2026")
+        ) : null,
         el("button", { class: "ui primary button", type: "button", onclick: () => openStatus(null) }, el("i", { class: "plus icon" }), t("sl_AddStatus", "Add Status\u2026"))
       )
     );
     const intro = el("div", { class: "sl-note sl-narrow", text: t("sl_StatusesHint", "Each status is one recorded sentence the caller hears for their ID, and what happens next. The code is what CSV files and other software use.") });
+    if (firstRun) {
+      fill(box, head, intro, templatePicker(true));
+      return;
+    }
+    const picker = state.showTemplates ? templatePicker(false) : null;
     if (!statuses.length) {
-      fill(box, head, intro, el("div", { class: "ui message" }, el("p", { text: t("sl_NoStatuses", 'No statuses yet. Add the ones your business uses, such as "Ready for pickup", with a recording of each sentence.') })));
+      fill(box, head, intro, picker, el("div", { class: "ui message" }, el("p", { text: t("sl_NoStatuses", 'No statuses yet. Add the ones your business uses, such as "Ready for pickup", with a recording of each sentence.') })));
       return;
     }
     const table = el(
@@ -579,17 +633,21 @@
       )),
       el("tbody", {}, statuses.map(statusRow))
     );
-    fill(box, head, intro, table);
+    fill(box, head, intro, picker, table);
   }
   function loadStatuses() {
     fill($id("sl-statuses"), el("div", { class: "ui active centered inline loader" }));
-    return get("statuses").then((d) => renderStatuses(d.statuses));
+    return get("statuses").then((d) => {
+      state.templates = d.templates;
+      state.template = d.template;
+      renderStatuses(d.statuses);
+    });
   }
   function moveStatus(id, step) {
     post("moveStatus", { id, step }).then((d) => renderStatuses(d.statuses)).fail((xhr) => showError(saveFailed(xhr)));
   }
   function openStatus(s) {
-    const v = s || { code: "", name: "", prompt_id: "", spoken_extra: "none", after_action: "repeat", transfer_number: "" };
+    const v = s || { code: "", name: "", script: "", prompt_id: "", spoken_extra: "none", after_action: "repeat", transfer_number: "" };
     const files = state.options.soundFiles.map((f) => [f.id, f.name]);
     const transferField = field(
       t("sl_TransferTo", "Put Through To"),
@@ -607,6 +665,11 @@
           el("input", { type: "text", id: "sl-status-code", value: v.code, maxlength: "32", class: "sl-code-input" }),
           s && s.records ? plural("sl_CodeRenameHint", s.records, { one: "Changing it changes it on its {n} record too.", other: "Changing it changes it on its {n} records too." }) : t("sl_StatusCodeHint", "A-Z, 0-9 and _, such as READY.")
         )
+      ),
+      field(
+        t("sl_StatusScript", "Wording"),
+        el("input", { type: "text", id: "sl-status-script", value: v.script || "", maxlength: "300" }),
+        t("sl_StatusScriptHint", "What the sentence says, for whoever records it. Not played to callers.")
       ),
       files.length ? field(
         t("sl_StatusPrompt", "Sentence the Caller Hears"),
@@ -642,6 +705,7 @@
       ...id ? { id } : {},
       name: $id("sl-status-name").value,
       code: $id("sl-status-code").value,
+      script: $id("sl-status-script").value,
       prompt_id: prompt ? prompt.value : "",
       spoken_extra: $id("sl-status-extra").value,
       after_action: $id("sl-status-after").value,
@@ -804,7 +868,12 @@
     const d = records.data;
     const box = $id("sl-records");
     if (!(state.statuses || []).length) {
-      fill(box, el("div", { class: "ui message" }, el("p", { text: t("sl_RecordsNeedStatuses", "Add statuses first: every record has one. Open the Statuses tab.") })));
+      fill(box, el(
+        "div",
+        { class: "ui message" },
+        el("p", { text: t("sl_RecordsNeedStatuses", "Add statuses first: every record has one.") }),
+        el("button", { class: "ui primary button", type: "button", onclick: () => selectTab("statuses") }, t("sl_SetUpStatuses", "Set Up Statuses"))
+      ));
       return;
     }
     const rows = d ? d.rows : [];

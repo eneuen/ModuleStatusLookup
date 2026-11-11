@@ -1,0 +1,8 @@
+{
+  "key": "blank",
+  "order": 5,
+  "name": { "en": "Start from Scratch", "ru": "С чистого листа" },
+  "description": { "en": "No statuses: add your own.", "ru": "Без статусов: добавьте свои." },
+  "id_length": [2, 10],
+  "statuses": []
+}
