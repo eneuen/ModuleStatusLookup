@@ -154,6 +154,9 @@ final class StatusEditor
     public function move(mixed $idInput, int $step): void
     {
         $id = self::id($idInput);
+        if ($step === 0) {
+            return;
+        }
         $ids = array_map('intval', $this->db->query('SELECT id FROM m_StatusLookupStatuses ORDER BY sort_order, id')->fetchAll(PDO::FETCH_COLUMN));
         $at = array_search($id, $ids, true);
         if ($at === false) {
@@ -246,15 +249,6 @@ final class StatusEditor
      */
     private function transaction(callable $work): mixed
     {
-        $this->db->beginTransaction();
-        try {
-            $result = $work();
-            $this->db->commit();
-
-            return $result;
-        } catch (Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
+        return Databases::immediate($this->db, $work);
     }
 }

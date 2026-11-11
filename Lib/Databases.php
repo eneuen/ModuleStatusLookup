@@ -51,6 +51,32 @@ final class Databases
         return $pdo;
     }
 
+    /**
+     * Runs $work in a write transaction that takes the write lock at its
+     * start (BEGIN IMMEDIATE). A deferred transaction that reads first and
+     * then writes can fail at once with "database is locked" when another
+     * process wrote in between; an immediate one waits for the lock (busy
+     * timeout) instead. The page, the worker and imports all write the
+     * module's database.
+     *
+     * @template T
+     * @param callable(): T $work
+     * @return T
+     */
+    public static function immediate(PDO $db, callable $work): mixed
+    {
+        $db->exec('BEGIN IMMEDIATE');
+        try {
+            $result = $work();
+            $db->exec('COMMIT');
+
+            return $result;
+        } catch (\Throwable $e) {
+            $db->exec('ROLLBACK');
+            throw $e;
+        }
+    }
+
     /** A value from the core's m_PbxSettings, or $default when it is not set. */
     public static function coreSetting(PDO $core, string $key, string $default = ''): string
     {

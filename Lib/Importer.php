@@ -8,7 +8,6 @@ namespace Modules\ModuleStatusLookup\Lib;
 
 use DateTimeImmutable;
 use PDO;
-use Throwable;
 
 /**
  * CSV import of records, with a dry run.
@@ -28,7 +27,7 @@ use Throwable;
  * without it.
  *
  * Modes: update adds new IDs and changes existing ones; replace also deletes
- * every record the file doesn't have. Applying writes everything in one
+ * every record the file doesn't have, except those whose row was left out. Applying writes everything in one
  * transaction: a call during the import sees the records as they were
  * before or after it, never half of it.
  *
@@ -63,6 +62,9 @@ final class Importer
 
     private int $rejectedCount = 0;
 
+    /** @var array<string, true> IDs (digits) of rows that were left out: replace keeps those records. */
+    private array $rejectedIds = [];
+
     /**
      * Reads and checks a file. Throws when the file as a whole can't be used
      * (size, encoding, header, row count); bad rows are collected instead.
@@ -77,7 +79,8 @@ final class Importer
         if (strlen($csv) > self::MAX_BYTES) {
             throw new EditorException('file_size', ['max' => self::MAX_BYTES / 1024 / 1024]);
         }
-        $csv = (string)preg_replace('/^\xEF\xBB\xBF/', '', $csv);
+        // A byte-order mark and blank lines before the header are ignored.
+        $csv = ltrim((string)preg_replace('/^\xEF\xBB\xBF/', '', $csv), "\r\n");
         if (!mb_check_encoding($csv, 'UTF-8')) {
             throw new EditorException('file_encoding');
         }
@@ -125,6 +128,9 @@ final class Importer
                 default => null,
             };
             if ($reason !== null) {
+                if ($id !== '') {
+                    $this->rejectedIds[$id] = true;
+                }
                 $this->reject($rowNo, $reason, $reason === 'duplicate' ? "$id ({$seen[$id]})" : ($id !== '' ? $id : mb_substr($row['lookup_id'] ?? '', 0, 20)));
                 continue;
             }
@@ -143,67 +149,89 @@ final class Importer
     /**
      * What applying the file would do, without changing anything.
      *
-     * @return array{added: int, updated: int, unchanged: int, deleted: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}
+     * @return array{added: int, updated: int, unchanged: int, deleted: int, kept: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}
      */
     public function preview(PDO $db, string $mode): array
     {
         self::requireMode($mode);
-        $existing = $this->existing($db);
-        $counts = ['added' => 0, 'updated' => 0, 'unchanged' => 0];
-        foreach ($this->rows as $id => $row) {
-            $counts[!isset($existing[$id]) ? 'added' : ($existing[$id] === self::fingerprint($row) ? 'unchanged' : 'updated')]++;
-        }
-        $deleted = $mode === 'replace' ? count(array_diff_key($existing, $this->rows)) : 0;
 
-        return $counts + ['deleted' => $deleted, 'rejected' => $this->rejectedCount, 'report' => $this->rejected];
+        return $this->plan($this->existing($db), $mode)['result'];
     }
 
     /**
      * Applies the file in one transaction and records it in the history.
-     * Replacing with a file that has no usable row is refused: it would
-     * delete every record.
+     * The counts are worked out inside the transaction, from the records as
+     * they are then. Replacing with a file that has no usable row is refused:
+     * it would delete every record.
      *
-     * @return array{added: int, updated: int, unchanged: int, deleted: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}
+     * @return array{added: int, updated: int, unchanged: int, deleted: int, kept: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}
      */
     public function apply(PDO $db, string $mode, string $by, string $fileName, int $now): array
     {
-        $result = $this->preview($db, $mode);
+        self::requireMode($mode);
         if ($mode === 'replace' && $this->rows === []) {
             throw new EditorException('replace_empty');
         }
         $by = mb_substr(trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $by)), 0, 64);
         $fileName = mb_substr(trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $fileName)), 0, 120);
-        $db->beginTransaction();
-        try {
+
+        return Databases::immediate($db, function () use ($db, $mode, $by, $fileName, $now): array {
             $existing = $this->existing($db);
+            $plan = $this->plan($existing, $mode);
             $insert = $db->prepare("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, expires_on, status_date, updated_at, updated_by,
                     source, pin_hash, phone) VALUES (?, ?, ?, ?, ?, ?, ?, 'csv', '', '')");
             $update = $db->prepare("UPDATE m_StatusLookupRecords SET status_code = ?, note = ?, expires_on = ?, status_date = ?, updated_at = ?,
                     updated_by = ?, source = 'csv' WHERE lookup_id = ?");
             foreach ($this->rows as $id => $row) {
                 if (!isset($existing[$id])) {
-                    $insert->execute([$id, $row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by]);
+                    $insert->execute([(string)$id, $row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by]);
                 } elseif ($existing[$id] !== self::fingerprint($row)) {
-                    $update->execute([$row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by, $id]);
+                    $update->execute([$row['status_code'], $row['note'], $row['expires_on'], $row['status_date'], $now, $by, (string)$id]);
                 }
             }
-            if ($mode === 'replace') {
-                $delete = $db->prepare('DELETE FROM m_StatusLookupRecords WHERE lookup_id = ?');
-                foreach (array_keys(array_diff_key($existing, $this->rows)) as $id) {
-                    $delete->execute([(string)$id]);
-                }
+            $delete = $db->prepare('DELETE FROM m_StatusLookupRecords WHERE lookup_id = ?');
+            foreach ($plan['delete'] as $id) {
+                $delete->execute([(string)$id]);
             }
+            $result = $plan['result'];
             $db->prepare('INSERT INTO m_StatusLookupImports (imported_at, imported_by, file_name, mode, added, updated, unchanged, deleted, rejected, report)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute([$now, $by, $fileName, $mode, $result['added'], $result['updated'], $result['unchanged'], $result['deleted'],
                     $result['rejected'], json_encode($result['report'], JSON_THROW_ON_ERROR)]);
-            $db->commit();
-        } catch (Throwable $e) {
-            $db->rollBack();
-            throw $e;
+
+            return $result;
+        });
+    }
+
+    /**
+     * What applying would do to $existing. Replace deletes records the file
+     * doesn't have, except those whose row was left out: a typo in one row
+     * must not delete that customer's record. Those are counted as kept.
+     *
+     * @param array<string, string> $existing
+     *
+     * @return array{result: array{added: int, updated: int, unchanged: int, deleted: int, kept: int, rejected: int, report: list<array{row: int, reason: string, id: string}>}, delete: list<string>}
+     */
+    private function plan(array $existing, string $mode): array
+    {
+        $counts = ['added' => 0, 'updated' => 0, 'unchanged' => 0];
+        foreach ($this->rows as $id => $row) {
+            $counts[!isset($existing[$id]) ? 'added' : ($existing[$id] === self::fingerprint($row) ? 'unchanged' : 'updated')]++;
+        }
+        $delete = [];
+        $kept = 0;
+        if ($mode === 'replace') {
+            foreach (array_keys(array_diff_key($existing, $this->rows)) as $id) {
+                if (isset($this->rejectedIds[(string)$id])) {
+                    $kept++;
+                } else {
+                    $delete[] = (string)$id;
+                }
+            }
         }
 
-        return $result;
+        return ['result' => $counts + ['deleted' => count($delete), 'kept' => $kept, 'rejected' => $this->rejectedCount, 'report' => $this->rejected],
+            'delete' => $delete];
     }
 
     /**
@@ -284,7 +312,8 @@ final class Importer
     {
         $text = trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $text));
 
-        return preg_match("/^'[=+\\-@]/", $text) === 1 ? substr($text, 1) : $text;
+        // Export's guard: one apostrophe before a formula character, or before an apostrophe the note itself began with.
+        return preg_match("/^'(?=[=+\\-@]|'[=+\\-@])/", $text) === 1 ? substr($text, 1) : $text;
     }
 
     private static function isDate(string $text): bool

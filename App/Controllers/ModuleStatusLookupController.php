@@ -31,6 +31,7 @@ use Modules\ModuleStatusLookup\Lib\StatusEditor;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
 use Modules\ModuleStatusLookup\Lib\Templates;
 use PDO;
+use PDOException;
 use Phalcon\Mvc\Dispatcher;
 use RuntimeException;
 use Throwable;
@@ -116,7 +117,17 @@ class ModuleStatusLookupController extends BaseController
     {
         $this->write(function (): array {
             $db = $this->writableModuleDb();
-            $values = $this->editor()->change($this->jsonPost('settings'), Settings::load($db));
+            $input = $this->jsonPost('settings');
+            $current = Settings::load($db);
+            $values = $this->editor()->change($input, $current);
+            // New ID lengths that would leave records out of reach need the admin's go-ahead.
+            [$min, $max] = Lookup::idLengths($values + $current);
+            if ([$min, $max] !== Lookup::idLengths($current) && ($input['confirm_lengths'] ?? false) !== true) {
+                $outside = $this->recordEditor($db)->countOutside($min, $max);
+                if ($outside > 0) {
+                    throw new EditorException('lengths_exclude', ['n' => $outside, 'min' => $min, 'max' => $max]);
+                }
+            }
             Settings::save($db, $values);
 
             return $this->callFlow();
@@ -260,7 +271,8 @@ class ModuleStatusLookupController extends BaseController
             });
         } catch (Throwable $e) {
             SystemMessages::sysLogMsg(self::class, 'Export failed: ' . $e->getMessage(), LOG_ERR);
-            $this->response->setStatusCode(400);
+            // 204: the browser stays on the page instead of opening an empty one.
+            $this->response->setStatusCode(204);
             $this->response->setContent('');
 
             return;
@@ -366,7 +378,8 @@ class ModuleStatusLookupController extends BaseController
      */
     private function uploadedImport(PDO $db): array
     {
-        $files = $this->request->getUploadedFiles(true);
+        // All uploads, failed ones too, so a failed one reports why.
+        $files = $this->request->getUploadedFiles(false);
         $file = $files[0] ?? null;
         // PHP's upload error code (the stubs type it as a string).
         $error = $file === null ? UPLOAD_ERR_NO_FILE : (int)$file->getError();
@@ -486,6 +499,10 @@ class ModuleStatusLookupController extends BaseController
             return true;
         } catch (EditorException $e) {
             $this->respond(400, ['success' => false, 'message' => $e->errorCode, 'params' => $e->params]);
+        } catch (PDOException $e) {
+            // A database error (such as a lock held too long) is a failure, not a refusal.
+            SystemMessages::sysLogMsg(self::class, 'Database error: ' . $e->getMessage(), LOG_ERR);
+            $this->respond(500, ['success' => false, 'message' => 'failed']);
         } catch (RuntimeException $e) {
             SystemMessages::sysLogMsg(self::class, 'Change refused: ' . $e->getMessage(), LOG_WARNING);
             $this->respond(400, ['success' => false, 'message' => 'refused']);

@@ -9,7 +9,6 @@ namespace Modules\ModuleStatusLookup\Lib;
 use DateTimeImmutable;
 use DateTimeZone;
 use PDO;
-use Throwable;
 
 /**
  * The records callers look up: list and search, add, change, bulk status
@@ -110,6 +109,15 @@ final class RecordEditor
         return $id;
     }
 
+    /** How many records have IDs outside these lengths, so callers couldn't reach them. */
+    public function countOutside(int $min, int $max): int
+    {
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM m_StatusLookupRecords WHERE LENGTH(lookup_id) < CAST(? AS INTEGER) OR LENGTH(lookup_id) > CAST(? AS INTEGER)');
+        $stmt->execute([$min, $max]);
+
+        return (int)$stmt->fetchColumn();
+    }
+
     /**
      * Gives the chosen records another status.
      *
@@ -175,7 +183,8 @@ final class RecordEditor
         $out = [];
         foreach ($cells as $cell) {
             $text = (string)$cell;
-            if ($text !== '' && str_contains("=+-@\t\r", $text[0])) {
+            // Also a leading apostrophe before such a character, which the import would otherwise take as this guard.
+            if ($text !== '' && (str_contains("=+-@\t\r", $text[0]) || preg_match("/^'[=+\\-@]/", $text) === 1)) {
                 $text = "'" . $text;
             }
             $out[] = preg_match('/[",\r\n;]/', $text) === 1 || $text !== trim($text) ? '"' . str_replace('"', '""', $text) . '"' : $text;
@@ -260,21 +269,16 @@ final class RecordEditor
      */
     private function each(array $ids, string $sql, callable $params): int
     {
-        $stmt = $this->db->prepare($sql);
-        $changed = 0;
-        $this->db->beginTransaction();
-        try {
+        return Databases::immediate($this->db, function () use ($ids, $sql, $params): int {
+            $stmt = $this->db->prepare($sql);
+            $changed = 0;
             foreach ($ids as $id) {
                 $stmt->execute($params($id));
                 $changed += $stmt->rowCount();
             }
-            $this->db->commit();
-        } catch (Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
 
-        return $changed;
+            return $changed;
+        });
     }
 
     /** @return list<int> */

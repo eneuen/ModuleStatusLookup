@@ -9,7 +9,6 @@ namespace Modules\ModuleStatusLookup\Lib;
 use DateTimeImmutable;
 use DateTimeZone;
 use PDO;
-use Throwable;
 
 /**
  * Writes the call log and the daily counts. Only the worker writes them, one
@@ -35,14 +34,13 @@ final class CallLogStore
      */
     public function record(array $record, DateTimeZone $timezone): bool
     {
-        $seen = $this->db->prepare('SELECT 1 FROM m_StatusLookupCallLog WHERE linkedid = ? AND started_at = ?');
-        $seen->execute([$record['linkedid'], (int)$record['started_at']]);
-        if ($seen->fetchColumn() !== false) {
-            return false;
-        }
-        $toPerson = $record['target'] !== '' ? '1' : '0';
-        $this->db->beginTransaction();
-        try {
+        return Databases::immediate($this->db, function () use ($record, $timezone): bool {
+            $seen = $this->db->prepare('SELECT 1 FROM m_StatusLookupCallLog WHERE linkedid = ? AND started_at = ?');
+            $seen->execute([$record['linkedid'], (int)$record['started_at']]);
+            if ($seen->fetchColumn() !== false) {
+                return false;
+            }
+            $toPerson = $record['target'] !== '' ? '1' : '0';
             $this->db->prepare('INSERT INTO m_StatusLookupCallLog (linkedid, started_at, ended_at, caller, id_entered, tries, misses,
                     outcome, last_result, status_code, target, is_test) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute([
@@ -56,12 +54,8 @@ final class CallLogStore
                         ON CONFLICT (day, outcome, to_person) DO UPDATE SET calls = calls + 1, misses = misses + excluded.misses')
                     ->execute([$day, $record['outcome'], $toPerson, (int)$record['misses']]);
             }
-            $this->db->commit();
 
             return true;
-        } catch (Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
+        });
     }
 }

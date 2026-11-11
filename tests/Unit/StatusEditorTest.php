@@ -138,6 +138,8 @@ final class StatusEditorTest extends TestCase
         $c = $this->editor->save(self::input(['code' => 'C']));
         $this->editor->move($c, -1);
         self::assertSame([$a, $c, $b], array_column($this->editor->list(), 'id'));
+        $this->editor->move($c, 0);    // no step: nothing moves
+        self::assertSame([$a, $c, $b], array_column($this->editor->list(), 'id'));
         $this->editor->move($a, -1);   // already first
         $this->editor->move($b, 1);    // already last
         self::assertSame([$a, $c, $b], array_column($this->editor->list(), 'id'));

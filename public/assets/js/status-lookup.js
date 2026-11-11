@@ -20,12 +20,19 @@
     return node;
   }
   var fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c !== null && c !== void 0 && c !== false));
-  var LOCALE = document.documentElement.lang || void 0;
+  var LOCALE = (() => {
+    try {
+      return Intl.getCanonicalLocales((document.documentElement.lang || "").replace(/_/g, "-"))[0] || void 0;
+    } catch (e) {
+      return void 0;
+    }
+  })();
   var count = (n) => Number(n).toLocaleString(LOCALE);
   var sub = (text, values) => Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), text);
   function plural(key, n, fallbacks, values = {}) {
     const form = new Intl.PluralRules(LOCALE).select(n);
-    const text = globalTranslate && (globalTranslate[`${key}_${form}`] || globalTranslate[`${key}_other`]) || fallbacks[form] || fallbacks.other;
+    const has = (k) => globalTranslate && k in globalTranslate;
+    const text = has(`${key}_${form}`) ? globalTranslate[`${key}_${form}`] : has(`${key}_other`) ? globalTranslate[`${key}_other`] : fallbacks[form] || fallbacks.other;
     return sub(text, { n: count(n), ...values });
   }
   var state = { tab: null, options: null, callFlow: null, dirty: false };
@@ -74,6 +81,7 @@
     range: ["sl_Err_range", 'Enter a whole number from {min} to {max} for "{field}".'],
     whole_number: ["sl_Err_whole_number", 'Enter a whole number for "{field}".'],
     destination: ["sl_Err_destination", 'Choose "{field}" from the list.'],
+    lengths_exclude: ["sl_Err_lengths_exclude", "Some records have IDs outside these lengths."],
     lengths: ["sl_Err_lengths", "The shortest ID can't be longer than the longest."],
     not_ready: ["sl_Err_not_ready", "The line can't be switched on yet: {problems}"],
     number_format: ["sl_Err_number_format", "Enter 2 to 8 digits, not starting with 0."],
@@ -131,6 +139,11 @@
   function post(action, data) {
     clearError();
     return $.ajax({ url: BASE + action, method: "POST", data, dataType: "json" }).then((r) => r && r.success ? r.data : $.Deferred().reject({ responseJSON: r }));
+  }
+  function busy(button, run) {
+    if (!button || button.classList.contains("loading")) return $.Deferred();
+    button.classList.add("loading");
+    return run().always(() => button.classList.remove("loading"));
   }
   function select(id, options, value, attrs = {}) {
     const option = ([v, text, extra = {}]) => el("option", { value: String(v), selected: String(v) === String(value != null ? value : ""), ...extra }, text);
@@ -252,17 +265,21 @@
     const file = state.options.soundFiles.find((f) => f.id === n);
     return file && file.path ? file.path : null;
   }
-  function promptOptions(withNone, builtInKeys) {
+  function promptOptions(withNone, builtInKeys, value, placeholder) {
     const builtIn = state.options.builtInPrompts.filter((p) => builtInKeys.includes(p.key) && p.available).map((p) => [p.id, t(BUILT_IN_NAMES[p.key][0], BUILT_IN_NAMES[p.key][1])]);
     const files = state.options.soundFiles.map((f) => [f.id, f.name]);
+    const known = [...builtIn, ...files].some(([id]) => String(id) === String(value));
+    const missing = value !== "" && value !== null && value !== void 0 && String(value) !== "0" && !known;
     return [
+      ...placeholder ? [["", placeholder]] : [],
+      ...missing ? [[value, t("sl_MissingPrompt", "Missing Sound File")]] : [],
       ...withNone ? [["0", t("sl_NoPrompt", "None")]] : [],
       ...builtIn.length ? [{ group: t("sl_BuiltInPrompts", "Built-In Prompts"), options: builtIn }] : [],
       ...files.length ? [{ group: t("sl_SoundFiles", "Sound Files"), options: files }] : []
     ];
   }
-  function promptControl(id, value, withNone, builtInKeys) {
-    const menu = select(id, promptOptions(withNone, builtInKeys), value, { class: "ui search dropdown sl-prompt-select" });
+  function promptControl(id, value, withNone, builtInKeys, placeholder = null) {
+    const menu = select(id, promptOptions(withNone, builtInKeys, value, placeholder), value != null ? value : "", { class: "ui search dropdown sl-prompt-select" });
     const listen = el("button", {
       class: "ui basic icon button sl-listen",
       type: "button",
@@ -279,7 +296,7 @@
       if (!dropdown) return;
       dropdown.querySelectorAll(".menu .item").forEach((item) => {
         const value = item.dataset.value;
-        if (!value || value === "0") return;
+        if (!value || value === "0" || !promptFile(value)) return;
         const play = el("span", { class: "sl-item-play", role: "button", tabindex: "-1" }, el("i", { class: "play icon" }));
         setPlaying(play, false);
         ["mousedown", "mouseup", "touchstart"].forEach((type) => play.addEventListener(type, (e) => e.stopPropagation()));
@@ -292,8 +309,13 @@
       });
     });
   }
-  function destinationOptions(emptyText) {
-    return [["", emptyText], ...state.options.destinations.map((d) => [d.value, d.name])];
+  function destinationOptions(emptyText, value = "") {
+    const known = state.options.destinations.some((d) => d.value === value);
+    return [
+      ["", emptyText],
+      ...value && !known ? [[value, sub(t("sl_GoneDestination", "{number} (No Longer Exists)"), { number: value })]] : [],
+      ...state.options.destinations.map((d) => [d.value, d.name])
+    ];
   }
   var PROMPTS = [
     ["welcome_prompt_id", ["welcome"], true, ["sl_PromptWelcomeHint", "Played once, as the call is answered. Callers can start typing during it."]],
@@ -390,13 +412,13 @@
         t("sl_SectionDestinationsHint", "Every way out of the lookup leads to a person. A status can also send callers somewhere of its own."),
         field(
           fieldName("operator_number"),
-          select("sl-operator_number", destinationOptions(t("sl_ChooseDestination", "Choose\u2026")), s.operator_number, { class: "ui search dropdown" }),
+          select("sl-operator_number", destinationOptions(t("sl_ChooseDestination", "Choose\u2026"), s.operator_number), s.operator_number, { class: "ui search dropdown" }),
           t("sl_OperatorHint", "Where 0 sends callers, at any prompt that listens for keys.")
         ),
-        field(fieldName("too_many_tries_number"), select("sl-too_many_tries_number", destinationOptions(t("sl_SameAsOperator", "Same as the Operator")), s.too_many_tries_number, { class: "ui search dropdown" })),
+        field(fieldName("too_many_tries_number"), select("sl-too_many_tries_number", destinationOptions(t("sl_SameAsOperator", "Same as the Operator"), s.too_many_tries_number), s.too_many_tries_number, { class: "ui search dropdown" })),
         field(
           fieldName("fault_number"),
-          select("sl-fault_number", destinationOptions(t("sl_SameAsOperator", "Same as the Operator")), s.fault_number, { class: "ui search dropdown" }),
+          select("sl-fault_number", destinationOptions(t("sl_SameAsOperator", "Same as the Operator"), s.fault_number), s.fault_number, { class: "ui search dropdown" }),
           t("sl_FaultHint", "When a status can't be played or its destination is gone. Callers first hear the apology.")
         )
       ),
@@ -438,10 +460,9 @@
       { class: "ui search dropdown", "aria-label": t("sl_TestExtension", "Extension") }
     );
     const button = el("button", { class: "ui basic button", type: "button", id: "sl-test-call", onclick: () => {
-      button.classList.add("loading");
-      post("testCall", { extension: ext.value }).then(() => {
-        $id("sl-test-note").textContent = sub(t("sl_TestCalling", "{ext} is ringing. Answer it to hear the line as a caller would."), { ext: ext.value });
-      }).fail((xhr) => showError(saveFailed(xhr))).always(() => button.classList.remove("loading"));
+      busy(button, () => post("testCall", { extension: ext.value }).then(() => {
+        $id("sl-test-note").textContent = sub(t("sl_TestCalling", "Calling {ext}: answer it to hear the line as a caller would."), { ext: ext.value });
+      }).fail((xhr) => showError(saveFailed(xhr))));
     } }, el("i", { class: "phone icon" }), t("sl_TestCall", "Test Call"));
     return el(
       "div",
@@ -450,7 +471,8 @@
       el("div", { class: "sl-note", id: "sl-test-note", text: data.answering ? t("sl_TestHint", "The extension rings; answering puts you through the line. Test calls are marked in the call log and left out of Activity.") : t("sl_TestOffHint", "The line isn't answering yet, so a test call ends at once.") })
     );
   }
-  function markDirty() {
+  function markDirty(e) {
+    if (e && e.target && e.target.matches && e.target.matches(".ui.dropdown input.search")) return;
     state.dirty = true;
     $id("sl-save-hint").textContent = t("sl_UnsavedChanges", "Unsaved changes");
   }
@@ -467,18 +489,33 @@
     });
     return values;
   }
-  function saveCallFlow() {
-    const button = $id("sl-save");
-    button.classList.add("loading");
-    post("saveCallFlow", { settings: JSON.stringify(readCallFlow()) }).then((data) => {
+  function saveCallFlow(confirmLengths = false) {
+    busy($id("sl-save"), () => post("saveCallFlow", { settings: JSON.stringify({ ...readCallFlow(), ...confirmLengths ? { confirm_lengths: true } : {} }) }).then((data) => {
       renderCallFlow(data);
       $id("sl-save-hint").textContent = t("sl_Saved", "Saved.");
-    }).fail((xhr) => showError(saveFailed(xhr))).always(() => button.classList.remove("loading"));
+    }).fail((xhr) => {
+      const body = xhr && xhr.responseJSON;
+      if (body && body.message === "lengths_exclude") {
+        const p = body.params || {};
+        confirmDialog(
+          t("sl_LengthsTitle", "Leave Records Out of Reach?"),
+          plural("sl_LengthsText", p.n, {
+            one: "{n} record has an ID that isn't {min} to {max} digits long. Callers won't be able to reach it until its ID or these lengths change.",
+            other: "{n} records have IDs that aren't {min} to {max} digits long. Callers won't be able to reach them until their IDs or these lengths change."
+          }, { min: p.min, max: p.max }),
+          t("sl_SaveAnyway", "Save Anyway")
+        ).then((ok) => {
+          if (ok) saveCallFlow(true);
+        });
+        return;
+      }
+      showError(saveFailed(xhr));
+    }));
   }
   function toggleLine(on) {
-    const go = () => post("saveCallFlow", { settings: JSON.stringify({ active: on }) }).then(renderCallFlow).fail((xhr) => showError(saveFailed(xhr)));
+    const go = () => busy($id("sl-toggle"), () => post("saveCallFlow", { settings: JSON.stringify({ active: on }) }).then(renderCallFlow).fail((xhr) => showError(saveFailed(xhr))));
     if (state.dirty) {
-      showError(t("sl_SaveFirst", "Save or undo your changes first."));
+      showError(t("sl_SaveFirst", "Save your changes first, or reload the page to undo them."));
       return;
     }
     if (on) {
@@ -494,6 +531,10 @@
     });
   }
   function changeNumber() {
+    if (state.dirty) {
+      showError(t("sl_SaveFirst", "Save your changes first, or reload the page to undo them."));
+      return;
+    }
     const number = $id("sl-number").value.trim();
     if (number === state.callFlow.settings.internal_number) return;
     confirmDialog(
@@ -574,7 +615,7 @@
     return el(
       "div",
       { class: "sl-templates" },
-      el("h4", { class: "ui header", text: firstRun ? t("sl_FirstRunTitle", "What kind of business is this?") : t("sl_AddFromTemplateTitle", "Add Statuses from a Template") }),
+      el("h4", { class: "ui header", text: firstRun ? t("sl_FirstRunTitle", "What Kind of Business Is This?") : t("sl_AddFromTemplateTitle", "Add Statuses from a Template") }),
       el("div", { class: "sl-note sl-narrow", text: firstRun ? t("sl_FirstRunHint", "A template adds the statuses that business usually needs, with the wording to record for each, and sets how long IDs are. Everything can be changed afterwards.") : t("sl_AddFromTemplateHint", "Only statuses you don't have yet (by code) are added; nothing is changed or deleted.") }),
       el("div", { class: "sl-template-cards" }, state.templates.map((tpl) => el(
         "div",
@@ -583,12 +624,12 @@
         el("div", { class: "sl-sub-line", text: tpl.description }),
         el("div", { class: "sl-sub-line", text: tpl.id_length[0] === tpl.id_length[1] ? plural("sl_TemplateIdExact", tpl.id_length[0], { one: "IDs of {n} digit", other: "IDs of {n} digits" }) : sub(t("sl_TemplateIdLength", "IDs of {min}\u2013{max} digits"), { min: tpl.id_length[0], max: tpl.id_length[1] }) }),
         tpl.statuses.length ? el("ul", { class: "sl-template-statuses" }, tpl.statuses.map((x) => el("li", { text: x.name }))) : null,
-        el("button", { class: "ui basic button", type: "button", onclick: () => applyTemplate(tpl) }, t("sl_UseTemplate", "Use This Template"))
+        el("button", { class: "ui basic button", type: "button", onclick: (e) => applyTemplate(tpl, e.currentTarget) }, t("sl_UseTemplate", "Use This Template"))
       )))
     );
   }
-  function applyTemplate(tpl) {
-    post("applyTemplate", { key: tpl.key }).then((d) => {
+  function applyTemplate(tpl, button) {
+    busy(button, () => post("applyTemplate", { key: tpl.key }).then((d) => {
       state.showTemplates = false;
       state.template = state.template || tpl.key;
       renderStatuses(d.statuses);
@@ -597,7 +638,7 @@
           text: plural("sl_TemplateAdded", d.added.length, { one: "{n} status added. Record its sentence and choose it with Edit.", other: "{n} statuses added. Record each sentence and choose it with Edit; Download Wording lists what to record." })
         })));
       }
-    }).fail((xhr) => showError(saveFailed(xhr)));
+    }).fail((xhr) => showError(saveFailed(xhr))));
   }
   function downloadWording() {
     const lines = state.statuses.filter((x) => x.script).map((x) => `${x.name} (${x.code})\r
@@ -676,7 +717,7 @@ ${x.script}\r
     const files = state.options.soundFiles.map((f) => [f.id, f.name]);
     const transferField = field(
       t("sl_TransferTo", "Put Through To"),
-      select("sl-status-transfer", destinationOptions(t("sl_ChooseDestination", "Choose\u2026")), v.transfer_number, { class: "ui search dropdown" })
+      select("sl-status-transfer", destinationOptions(t("sl_ChooseDestination", "Choose\u2026"), v.transfer_number), v.transfer_number, { class: "ui search dropdown" })
     );
     const form = $id("sl-status-form");
     fill(
@@ -698,7 +739,7 @@ ${x.script}\r
       ),
       files.length ? field(
         t("sl_StatusPrompt", "Sentence the Caller Hears"),
-        promptControl("sl-status-prompt", v.prompt_id || "", false, []),
+        promptControl("sl-status-prompt", v.prompt_id || "", false, [], t("sl_ChooseSoundFile", "Choose a Sound File\u2026")),
         t("sl_StatusPromptHint", "Upload a recording of the sentence on the PBX's Sound files page, then choose it here. Keep it short: one sentence.")
       ) : el("div", { class: "ui warning message" }, el("p", { text: t("sl_NoSoundFiles", "The PBX has no sound files yet. Upload a recording of the sentence on its Sound files page first.") })),
       field(
@@ -736,12 +777,10 @@ ${x.script}\r
       after_action: $id("sl-status-after").value,
       transfer_number: $id("sl-status-transfer").value
     };
-    const button = $id("sl-status-save");
-    button.classList.add("loading");
-    post("saveStatus", { status: JSON.stringify(status) }).then((d) => {
+    busy($id("sl-status-save"), () => post("saveStatus", { status: JSON.stringify(status) }).then((d) => {
       $("#sl-status-modal").modal("hide");
       renderStatuses(d.statuses);
-    }).fail((xhr) => showModalError("sl-status-form", saveFailed(xhr))).always(() => button.classList.remove("loading"));
+    }).fail((xhr) => showModalError("sl-status-form", saveFailed(xhr))));
   }
   function showModalError(formId, text) {
     const form = $id(formId);
@@ -777,11 +816,14 @@ ${x.script}\r
   function statusLabel(code) {
     const index = (state.statuses || []).findIndex((s) => s.code === code);
     const status = index >= 0 ? state.statuses[index] : null;
-    return el(
+    const label2 = el(
       "span",
       { class: `ui small ${index >= 0 ? STATUS_COLOURS[index % STATUS_COLOURS.length] : "basic"} label`, title: code },
       status ? status.name : code
     );
+    if (!status || status.prompt_id) return label2;
+    const text = t("sl_StatusNotRecorded", "Not recorded yet: callers are put through to a person");
+    return el("span", { class: "sl-nowrap" }, label2, el("i", { class: "exclamation triangle icon sl-warn-text", title: text, "aria-label": text, role: "img" }));
   }
   var statusChoices = (allText) => [...allText ? [["", allText]] : [], ...(state.statuses || []).map((s) => [s.code, s.name])];
   function recordsToolbar() {
@@ -789,8 +831,9 @@ ${x.script}\r
     search.addEventListener("input", () => {
       clearTimeout(records.timer);
       records.timer = setTimeout(() => {
-        records.query.search = search.value.trim();
+        records.query.search = search.value;
         records.query.page = 1;
+        records.selected.clear();
         loadRecords();
       }, 300);
     });
@@ -799,7 +842,7 @@ ${x.script}\r
       "sl-rec-stale",
       [["0", t("sl_AnyUpdate", "Any Last Change")], ...[7, 30, 90].map((d) => [String(d), plural("sl_NotUpdatedIn", d, { one: "Not Changed in {n} Day", other: "Not Changed in {n} Days" })])],
       records.query.stale,
-      { class: "ui dropdown", "aria-label": t("sl_LastChange", "Last change") }
+      { class: "ui dropdown", "aria-label": t("sl_LastChange", "Last Change") }
     );
     const expired = el(
       "div",
@@ -811,11 +854,13 @@ ${x.script}\r
       records.query.status = status.value;
       records.query.stale = stale.value;
       records.query.page = 1;
+      records.selected.clear();
       loadRecords();
     }));
     expired.querySelector("input").addEventListener("change", (e) => {
       records.query.expired = e.target.checked ? "1" : "";
       records.query.page = 1;
+      records.selected.clear();
       loadRecords();
     });
     return el(
@@ -841,7 +886,7 @@ ${x.script}\r
   function bulkBar() {
     const n = records.selected.size;
     if (!n) return null;
-    const to = select("sl-bulk-status", statusChoices(null), "", { class: "ui dropdown", "aria-label": t("sl_NewStatus", "New status") });
+    const to = select("sl-bulk-status", statusChoices(null), "", { class: "ui dropdown", "aria-label": t("sl_NewStatus", "New Status") });
     return el(
       "div",
       { class: "sl-bulk ui form" },
@@ -940,25 +985,25 @@ ${x.script}\r
         loadRecords();
       } }, t("sl_Next", "Next"))
     ) : null;
-    const focused = document.activeElement && document.activeElement.id === "sl-rec-search";
+    if (!$id("sl-rec-toolbar")) {
+      fill(box, el("div", { id: "sl-rec-toolbar" }, recordsToolbar()), el("div", { id: "sl-rec-body" }));
+      $("#sl-rec-toolbar select.ui.dropdown").dropdown({ placeholder: false });
+      $("#sl-rec-toolbar .ui.checkbox").checkbox();
+    }
+    const body = $id("sl-rec-body");
     fill(
-      box,
-      recordsToolbar(),
+      body,
       d ? el("div", { class: "sl-note sl-count", text: plural("sl_RecordCount", d.total, { one: "{n} record", other: "{n} records" }) }) : null,
       bulkBar(),
       table,
       pager
     );
-    $(box).find("select.ui.dropdown").dropdown({ placeholder: false });
-    $(box).find(".ui.checkbox").checkbox();
-    if (focused) {
-      const search = $id("sl-rec-search");
-      search.focus();
-      search.setSelectionRange(search.value.length, search.value.length);
-    }
+    $(body).find("select.ui.dropdown").dropdown({ placeholder: false });
   }
   function loadRecords() {
+    const seq = records.seq = (records.seq || 0) + 1;
     return get("records", records.query).then((d) => {
+      if (seq !== records.seq) return;
       records.data = d;
       records.query.page = d.page;
       renderRecords();
@@ -968,6 +1013,7 @@ ${x.script}\r
     fill($id("sl-records"), el("div", { class: "ui active centered inline loader" }));
     get("statuses").then((d) => {
       state.statuses = d.statuses;
+      if (records.query.status && !d.statuses.some((x) => x.code === records.query.status)) records.query.status = "";
       return loadRecords();
     });
   }
@@ -1003,8 +1049,9 @@ ${x.script}\r
       e.preventDefault();
       save();
     };
-    $("#sl-record-modal").modal({ autofocus: false }).modal("show");
-    if (!r) $id("sl-record-id").focus();
+    $("#sl-record-modal").modal({ autofocus: false, onVisible: () => {
+      if (!r) $id("sl-record-id").focus();
+    } }).modal("show");
   }
   function saveRecord(id) {
     const record = {
@@ -1015,12 +1062,10 @@ ${x.script}\r
       status_date: $id("sl-record-date").value,
       expires_on: $id("sl-record-expires").value
     };
-    const button = $id("sl-record-save");
-    button.classList.add("loading");
-    post("saveRecord", { record: JSON.stringify(record) }).then(() => {
+    busy($id("sl-record-save"), () => post("saveRecord", { record: JSON.stringify(record) }).then(() => {
       $("#sl-record-modal").modal("hide");
       return loadRecords();
-    }).fail((xhr) => showModalError("sl-record-form", saveFailed(xhr))).always(() => button.classList.remove("loading"));
+    }).fail((xhr) => showModalError("sl-record-form", saveFailed(xhr))));
   }
   function bulkStatus(code) {
     const ids = [...records.selected];
@@ -1032,7 +1077,7 @@ ${x.script}\r
   function deleteRecords(ids, single) {
     const text = single ? sub(t("sl_DeleteRecordText", 'Record {id} will be deleted. Callers who type it will hear "not found".'), { id: single }) : plural("sl_DeleteRecordsText", ids.length, { one: "{n} record will be deleted.", other: "{n} records will be deleted." });
     const ok = single ? t("sl_DeleteRecord", "Delete Record") : plural("sl_DeleteRecordsButton", ids.length, { one: "Delete {n} Record", other: "Delete {n} Records" });
-    confirmDialog(t("sl_DeleteRecordsTitle", "Delete Records?"), text, ok).then((yes) => {
+    confirmDialog(single ? t("sl_DeleteRecordTitle", "Delete Record?") : t("sl_DeleteRecordsTitle", "Delete Records?"), text, ok).then((yes) => {
       if (!yes) return;
       post("deleteRecords", { ids: JSON.stringify(ids) }).then(() => {
         ids.forEach((id) => records.selected.delete(id));
@@ -1059,7 +1104,7 @@ ${x.script}\r
     update: ["sl_ModeUpdate", "Add and Update", ["sl_ModeUpdateHint", "New IDs are added and existing ones changed. Records not in the file stay as they are."]],
     replace: ["sl_ModeReplace", "Replace All", ["sl_ModeReplaceHint", "The file becomes the full list: records not in it are deleted."]]
   };
-  var importState = { file: null, preview: null };
+  var importState = { file: null, preview: null, mode: "update" };
   var EXAMPLE_CSV = "lookup_id,status_code,note,pin,expires,date\r\n10445,READY,Toyota Vios,,2026-11-30,\r\n10446,PARTS,iPhone 13 screen,,,\r\n00451,SHIPPED,,,,2026-11-12\r\n";
   function download(filename, blob) {
     const url = URL.createObjectURL(blob);
@@ -1073,7 +1118,7 @@ ${x.script}\r
     clearError();
     const data = new FormData();
     data.append("file", importState.file);
-    data.append("mode", $id("sl-import-mode").value);
+    data.append("mode", importState.mode);
     return $.ajax({ url: BASE + action, method: "POST", data, processData: false, contentType: false, dataType: "json" }).then((r) => r && r.success ? r.data : $.Deferred().reject({ responseJSON: r }));
   }
   function rejectTable(report, total) {
@@ -1124,8 +1169,9 @@ ${x.script}\r
     const changes = p.added + p.updated + p.deleted;
     fill(
       box,
-      el("h4", { class: "ui header", text: sub(t("sl_PreviewTitle", 'What importing "{file}" will do'), { file: importState.file.name }) }),
+      el("h4", { class: "ui header", text: sub(t("sl_PreviewTitle", 'What Importing "{file}" Will Do'), { file: importState.file.name }) }),
       countTiles(p),
+      p.kept ? el("div", { class: "sl-note", text: plural("sl_KeptNote", p.kept, { one: "{n} record not in the file is kept, because its row was left out. Fix the row and import again to change it.", other: "{n} records not in the file are kept, because their rows were left out. Fix the rows and import again to change them." }) }) : null,
       rejectTable(p.report, p.rejected),
       el(
         "div",
@@ -1148,28 +1194,19 @@ ${x.script}\r
       showError(t("sl_ChooseFile", "Choose a CSV file first."));
       return;
     }
-    const button = $id("sl-import-check");
-    button.classList.add("loading");
-    upload("importPreview").then((p) => {
+    busy($id("sl-import-check"), () => upload("importPreview").then((p) => {
       importState.preview = p;
       renderPreview();
-    }).fail((xhr) => showError(saveFailed(xhr))).always(() => button.classList.remove("loading"));
+    }).fail((xhr) => showError(saveFailed(xhr))));
   }
   function applyImport() {
     const p = importState.preview;
-    const go = () => {
-      const button = $id("sl-import-apply");
-      button.classList.add("loading");
-      upload("importApply").then((r) => {
-        importState.preview = null;
-        importState.file = null;
-        renderImport(r);
-        loadImports();
-      }).fail((xhr) => {
-        button.classList.remove("loading");
-        showError(saveFailed(xhr));
-      });
-    };
+    const go = () => busy($id("sl-import-apply"), () => upload("importApply").then((r) => {
+      importState.preview = null;
+      importState.file = null;
+      renderImport(r);
+      loadImports();
+    }).fail((xhr) => showError(saveFailed(xhr))));
     if (!p.deleted) {
       go();
       return;
@@ -1190,7 +1227,10 @@ ${x.script}\r
   }
   function renderImport(done) {
     const input = el("input", { type: "file", id: "sl-import-file", accept: ".csv,text/csv", class: "sl-visually-hidden" });
-    input.addEventListener("change", () => chooseFile(input.files[0]));
+    input.addEventListener("change", () => {
+      chooseFile(input.files[0]);
+      input.value = "";
+    });
     const drop = el(
       "label",
       { class: "sl-drop", for: "sl-import-file" },
@@ -1208,14 +1248,14 @@ ${x.script}\r
       e.preventDefault();
       chooseFile(e.dataTransfer.files[0]);
     });
-    const mode = select("sl-import-mode", Object.entries(MODES).map(([k, m]) => [k, label(m)]), "update", { class: "ui dropdown" });
+    const mode = select("sl-import-mode", Object.entries(MODES).map(([k, m]) => [k, label(m)]), importState.mode, { class: "ui dropdown" });
     const modeHint = el("div", { class: "sl-note", id: "sl-import-mode-hint" });
-    const showModeHint = () => {
+    mode.addEventListener("change", () => {
+      importState.mode = mode.value;
       modeHint.textContent = label(MODES[mode.value][2]);
       importState.preview = null;
       renderPreview();
-    };
-    mode.addEventListener("change", showModeHint);
+    });
     fill(
       $id("sl-import"),
       done ? el("div", { class: "ui positive message" }, el("p", { text: sub(
@@ -1255,7 +1295,7 @@ ${x.script}\r
       el("div", { id: "sl-import-history" })
     );
     $(mode).dropdown({ placeholder: false });
-    modeHint.textContent = label(MODES.update[2]);
+    modeHint.textContent = label(MODES[importState.mode][2]);
     renderPreview();
   }
   function renderHistory(imports) {
@@ -1412,6 +1452,8 @@ ${x.script}\r
     const prevRate = pct(prev.deflected, prev.calls);
     const box = $id("sl-activity-body");
     if (!tot.calls) {
+      Object.values(activity.charts).forEach((c) => c.dispose());
+      activity.charts = {};
       fill(box, el("div", { class: "ui message" }, el("p", { text: t("sl_NoCalls", "No calls to the lookup line in this period.") })));
       renderCallLog();
       return;
@@ -1593,15 +1635,21 @@ ${x.script}\r
     $(filter).dropdown({ placeholder: false });
   }
   function loadCallLog() {
+    const seq = activity.logSeq = (activity.logSeq || 0) + 1;
     return get("callLog", { from: activity.from, to: activity.to, outcome: activity.outcome, page: activity.page }).then((d) => {
-      activity.log = d;
-      renderCallLog();
+      if (seq === activity.logSeq) {
+        activity.log = d;
+        renderCallLog();
+      }
     });
   }
   function loadActivity() {
     clearError();
     activity.page = 1;
-    get("activity", { from: activity.from, to: activity.to }).then(renderActivity);
+    const seq = activity.seq = (activity.seq || 0) + 1;
+    get("activity", { from: activity.from, to: activity.to }).then((a) => {
+      if (seq === activity.seq) renderActivity(a);
+    });
     loadCallLog();
   }
   function loadActivityTab() {
@@ -1624,6 +1672,7 @@ ${x.script}\r
   }
   var TABS = { records: loadRecordsTab, import: loadImportTab, activity: loadActivityTab, statuses: loadStatuses, callflow: loadCallFlow };
   function selectTab(tab) {
+    if (tab === state.tab && tab === "callflow" && state.dirty) return;
     if (state.tab === "callflow" && tab !== "callflow" && state.dirty) {
       confirmDialog(t("sl_LeaveTitle", "Leave Without Saving?"), t("sl_LeaveText", "Your changes to the call flow will be lost."), t("sl_Leave", "Leave")).then((ok) => {
         if (ok) {

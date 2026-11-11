@@ -61,6 +61,17 @@ final class TemplatesTest extends TestCase
         self::assertSame(10, (int)$db->query('SELECT MAX(sort_order) FROM m_StatusLookupStatuses')->fetchColumn());
     }
 
+    public function testIdLengthsLeftAloneWhenRecordsExist(): void
+    {
+        $db = TestDatabases::module();
+        Settings::ensureRow($db);
+        $db->exec("INSERT INTO m_StatusLookupRecords (lookup_id, status_code) VALUES ('1234567', 'X')");
+        (new Templates(self::DIR))->apply($db, 'auto', 'en-en', '');
+
+        $settings = Settings::load($db);
+        self::assertSame(['auto', 4, 10], [$settings['template'], $settings['id_min_length'], $settings['id_max_length']]);
+    }
+
     public function testUnknownTemplateRefused(): void
     {
         foreach (['nope', '../templates/repair', 'REPAIR'] as $key) {

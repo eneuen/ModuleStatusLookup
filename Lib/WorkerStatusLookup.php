@@ -31,6 +31,9 @@ require_once 'Globals.php';
  */
 class WorkerStatusLookup extends WorkerBase
 {
+    /** Seconds a test call request may wait in the queue. */
+    private const int TEST_CALL_MAX_AGE = 30;
+
     private CallLogStore $store;
 
     public function start(array $argv): void
@@ -71,6 +74,10 @@ class WorkerStatusLookup extends WorkerBase
             $request = json_decode($message->getBody(), true, 4, JSON_THROW_ON_ERROR);
             if (!is_array($request) || ($request['command'] ?? '') !== StatusLookupConf::COMMAND_TEST_CALL) {
                 throw new InvalidArgumentException('Unknown command');
+            }
+            // A request that waited (the worker was restarting) is dropped: a phone ringing much later would surprise.
+            if (time() - (int)($request['requested_at'] ?? 0) > self::TEST_CALL_MAX_AGE) {
+                throw new InvalidArgumentException('Test call request expired');
             }
             $this->testCall((string)($request['extension'] ?? ''));
         } catch (InvalidArgumentException | \JsonException $e) {

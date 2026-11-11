@@ -41,7 +41,14 @@ function el(tag, attrs = {}, ...children) {
 const fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
 
 /** The admin cabinet's language, which the page sets on <html>; dates and numbers follow it, not the browser's. */
-const LOCALE = document.documentElement.lang || undefined;
+const LOCALE = (() => {
+  // The cabinet writes some languages with an underscore (pt_BR, zh_Hans), which Intl refuses.
+  try {
+    return Intl.getCanonicalLocales((document.documentElement.lang || '').replace(/_/g, '-'))[0] || undefined;
+  } catch (e) {
+    return undefined;
+  }
+})();
 const count = (n) => Number(n).toLocaleString(LOCALE);
 const sub = (text, values) => Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), text);
 
@@ -51,7 +58,10 @@ const sub = (text, values) => Object.entries(values).reduce((s, [k, v]) => s.spl
  */
 function plural(key, n, fallbacks, values = {}) {
   const form = new Intl.PluralRules(LOCALE).select(n);
-  const text = (globalTranslate && (globalTranslate[`${key}_${form}`] || globalTranslate[`${key}_other`])) || fallbacks[form] || fallbacks.other;
+  // `in`, not a truthy test: the cabinet's globalTranslate returns the key itself for a missing text.
+  const has = (k) => globalTranslate && k in globalTranslate;
+  const text = has(`${key}_${form}`) ? globalTranslate[`${key}_${form}`]
+    : (has(`${key}_other`) ? globalTranslate[`${key}_other`] : (fallbacks[form] || fallbacks.other));
   return sub(text, { n: count(n), ...values });
 }
 
@@ -109,6 +119,7 @@ const ERRORS = {
   range: ['sl_Err_range', 'Enter a whole number from {min} to {max} for "{field}".'],
   whole_number: ['sl_Err_whole_number', 'Enter a whole number for "{field}".'],
   destination: ['sl_Err_destination', 'Choose "{field}" from the list.'],
+  lengths_exclude: ['sl_Err_lengths_exclude', 'Some records have IDs outside these lengths.'],
   lengths: ['sl_Err_lengths', 'The shortest ID can\'t be longer than the longest.'],
   not_ready: ['sl_Err_not_ready', 'The line can\'t be switched on yet: {problems}'],
   number_format: ['sl_Err_number_format', 'Enter 2 to 8 digits, not starting with 0.'],
@@ -174,6 +185,17 @@ function post(action, data) {
   clearError();
   return $.ajax({ url: BASE + action, method: 'POST', data, dataType: 'json' })
     .then((r) => (r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })));
+}
+
+/**
+ * Runs a button's request once at a time: a second click, or Enter in its
+ * form, while it runs does nothing. Returns the request, or a promise that
+ * never settles for an ignored click.
+ */
+function busy(button, run) {
+  if (!button || button.classList.contains('loading')) return $.Deferred();
+  button.classList.add('loading');
+  return run().always(() => button.classList.remove('loading'));
 }
 
 /** A select from [value, text] pairs; an entry { group, options } becomes a labelled group of them. */
@@ -312,11 +334,16 @@ function promptFile(id) {
 }
 
 /** The prompt menu's choices: built-in prompts (only those with a recording), then the PBX's sound files. */
-function promptOptions(withNone, builtInKeys) {
+function promptOptions(withNone, builtInKeys, value, placeholder) {
   const builtIn = state.options.builtInPrompts.filter((p) => builtInKeys.includes(p.key) && p.available)
     .map((p) => [p.id, t(BUILT_IN_NAMES[p.key][0], BUILT_IN_NAMES[p.key][1])]);
   const files = state.options.soundFiles.map((f) => [f.id, f.name]);
+  const known = [...builtIn, ...files].some(([id]) => String(id) === String(value));
+  // A prompt that is gone stays chosen and named as missing, so saving doesn't quietly pick another.
+  const missing = value !== '' && value !== null && value !== undefined && String(value) !== '0' && !known;
   return [
+    ...(placeholder ? [['', placeholder]] : []),
+    ...(missing ? [[value, t('sl_MissingPrompt', 'Missing Sound File')]] : []),
     ...(withNone ? [['0', t('sl_NoPrompt', 'None')]] : []),
     ...(builtIn.length ? [{ group: t('sl_BuiltInPrompts', 'Built-In Prompts'), options: builtIn }] : []),
     ...(files.length ? [{ group: t('sl_SoundFiles', 'Sound Files'), options: files }] : []),
@@ -324,8 +351,8 @@ function promptOptions(withNone, builtInKeys) {
 }
 
 /** A prompt menu with a Listen button beside it. initPromptMenus() turns the select into a searchable menu. */
-function promptControl(id, value, withNone, builtInKeys) {
-  const menu = select(id, promptOptions(withNone, builtInKeys), value, { class: 'ui search dropdown sl-prompt-select' });
+function promptControl(id, value, withNone, builtInKeys, placeholder = null) {
+  const menu = select(id, promptOptions(withNone, builtInKeys, value, placeholder), value ?? '', { class: 'ui search dropdown sl-prompt-select' });
   const listen = el('button', { class: 'ui basic icon button sl-listen', type: 'button',
     onclick: () => togglePreview(promptFile(menu.value), listen) }, el('i', { class: 'play icon' }));
   setPlaying(listen, false);
@@ -345,7 +372,7 @@ function initPromptMenus(root) {
     if (!dropdown) return;
     dropdown.querySelectorAll('.menu .item').forEach((item) => {
       const value = item.dataset.value;
-      if (!value || value === '0') return;
+      if (!value || value === '0' || !promptFile(value)) return;
       const play = el('span', { class: 'sl-item-play', role: 'button', tabindex: '-1' }, el('i', { class: 'play icon' }));
       setPlaying(play, false);
       // Listening must not choose the item or close the list.
@@ -361,8 +388,11 @@ function initPromptMenus(root) {
 }
 
 /** The destination menu's choices, by the PBX's own names. */
-function destinationOptions(emptyText) {
-  return [['', emptyText], ...state.options.destinations.map((d) => [d.value, d.name])];
+function destinationOptions(emptyText, value = '') {
+  const known = state.options.destinations.some((d) => d.value === value);
+  // A destination that is gone stays chosen and named as such, so saving doesn't quietly change it.
+  return [['', emptyText], ...(value && !known ? [[value, sub(t('sl_GoneDestination', '{number} (No Longer Exists)'), { number: value })]] : []),
+    ...state.options.destinations.map((d) => [d.value, d.name])];
 }
 
 /* ------------------------------------------------------------------ call flow */
@@ -447,10 +477,10 @@ function renderCallFlow(data) {
       el('div', { class: 'sl-note', text: t('sl_IdLengthHint', 'IDs are 2 to 20 digits. Leading zeros count: 00451 and 451 are different IDs.') }),
       el('div', { class: 'two fields' }, NUMBER_FIELDS.slice(2).map(([f, min, max, hint]) => field(fieldName(f), numberInput(`sl-${f}`, s[f], min, max), t(hint[0], hint[1]))))),
     section(t('sl_SectionDestinations', 'Where Callers Go'), t('sl_SectionDestinationsHint', 'Every way out of the lookup leads to a person. A status can also send callers somewhere of its own.'),
-      field(fieldName('operator_number'), select('sl-operator_number', destinationOptions(t('sl_ChooseDestination', 'Choose…')), s.operator_number, { class: 'ui search dropdown' }),
+      field(fieldName('operator_number'), select('sl-operator_number', destinationOptions(t('sl_ChooseDestination', 'Choose…'), s.operator_number), s.operator_number, { class: 'ui search dropdown' }),
         t('sl_OperatorHint', 'Where 0 sends callers, at any prompt that listens for keys.')),
-      field(fieldName('too_many_tries_number'), select('sl-too_many_tries_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator')), s.too_many_tries_number, { class: 'ui search dropdown' })),
-      field(fieldName('fault_number'), select('sl-fault_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator')), s.fault_number, { class: 'ui search dropdown' }),
+      field(fieldName('too_many_tries_number'), select('sl-too_many_tries_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator'), s.too_many_tries_number), s.too_many_tries_number, { class: 'ui search dropdown' })),
+      field(fieldName('fault_number'), select('sl-fault_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator'), s.fault_number), s.fault_number, { class: 'ui search dropdown' }),
         t('sl_FaultHint', 'When a status can\'t be played or its destination is gone. Callers first hear the apology.'))),
     section(t('sl_SectionGuessing', 'Guessing Protection'), t('sl_SectionGuessingHint', 'IDs typed that aren\'t found count as misses. A caller number with too many misses in the last hour is put straight through to the operator; so is everyone, when all callers together miss too often (callers who hide their number, or change it with every call). 0 turns a limit off.'),
       el('div', { class: 'two fields' },
@@ -477,11 +507,9 @@ function testCallRow(data) {
   const ext = select('sl-test-ext', extensions.map((x) => [x.number, x.name ? `${x.name} (${x.number})` : x.number]), extensions[0].number,
     { class: 'ui search dropdown', 'aria-label': t('sl_TestExtension', 'Extension') });
   const button = el('button', { class: 'ui basic button', type: 'button', id: 'sl-test-call', onclick: () => {
-    button.classList.add('loading');
-    post('testCall', { extension: ext.value })
-      .then(() => { $id('sl-test-note').textContent = sub(t('sl_TestCalling', '{ext} is ringing. Answer it to hear the line as a caller would.'), { ext: ext.value }); })
-      .fail((xhr) => showError(saveFailed(xhr)))
-      .always(() => button.classList.remove('loading'));
+    busy(button, () => post('testCall', { extension: ext.value })
+      .then(() => { $id('sl-test-note').textContent = sub(t('sl_TestCalling', 'Calling {ext}: answer it to hear the line as a caller would.'), { ext: ext.value }); })
+      .fail((xhr) => showError(saveFailed(xhr))));
   } }, el('i', { class: 'phone icon' }), t('sl_TestCall', 'Test Call'));
   return el('div', { class: 'ui form sl-test' },
     el('div', { class: 'sl-inline' }, field(t('sl_TestTheLine', 'Test the Line'), ext), button),
@@ -490,7 +518,9 @@ function testCallRow(data) {
       : t('sl_TestOffHint', 'The line isn\'t answering yet, so a test call ends at once.') }));
 }
 
-function markDirty() {
+function markDirty(e) {
+  // Typing in a menu's search box only filters it; choosing an entry fires change.
+  if (e && e.target && e.target.matches && e.target.matches('.ui.dropdown input.search')) return;
   state.dirty = true;
   $id('sl-save-hint').textContent = t('sl_UnsavedChanges', 'Unsaved changes');
 }
@@ -503,24 +533,33 @@ function readCallFlow() {
   return values;
 }
 
-function saveCallFlow() {
-  const button = $id('sl-save');
-  button.classList.add('loading');
-  post('saveCallFlow', { settings: JSON.stringify(readCallFlow()) })
+function saveCallFlow(confirmLengths = false) {
+  busy($id('sl-save'), () => post('saveCallFlow', { settings: JSON.stringify({ ...readCallFlow(), ...(confirmLengths ? { confirm_lengths: true } : {}) }) })
     .then((data) => {
       renderCallFlow(data);
       $id('sl-save-hint').textContent = t('sl_Saved', 'Saved.');
     })
-    .fail((xhr) => showError(saveFailed(xhr)))
-    .always(() => button.classList.remove('loading'));
+    .fail((xhr) => {
+      const body = xhr && xhr.responseJSON;
+      if (body && body.message === 'lengths_exclude') {
+        // Records whose IDs no longer fit can't be reached by phone: ask before saving.
+        const p = body.params || {};
+        confirmDialog(t('sl_LengthsTitle', 'Leave Records Out of Reach?'),
+          plural('sl_LengthsText', p.n, { one: '{n} record has an ID that isn\'t {min} to {max} digits long. Callers won\'t be able to reach it until its ID or these lengths change.',
+            other: '{n} records have IDs that aren\'t {min} to {max} digits long. Callers won\'t be able to reach them until their IDs or these lengths change.' }, { min: p.min, max: p.max }),
+          t('sl_SaveAnyway', 'Save Anyway')).then((ok) => { if (ok) saveCallFlow(true); });
+        return;
+      }
+      showError(saveFailed(xhr));
+    }));
 }
 
 function toggleLine(on) {
-  const go = () => post('saveCallFlow', { settings: JSON.stringify({ active: on }) })
+  const go = () => busy($id('sl-toggle'), () => post('saveCallFlow', { settings: JSON.stringify({ active: on }) })
     .then(renderCallFlow)
-    .fail((xhr) => showError(saveFailed(xhr)));
+    .fail((xhr) => showError(saveFailed(xhr))));
   if (state.dirty) {
-    showError(t('sl_SaveFirst', 'Save or undo your changes first.'));
+    showError(t('sl_SaveFirst', 'Save your changes first, or reload the page to undo them.'));
     return;
   }
   if (on) {
@@ -533,6 +572,10 @@ function toggleLine(on) {
 }
 
 function changeNumber() {
+  if (state.dirty) {
+    showError(t('sl_SaveFirst', 'Save your changes first, or reload the page to undo them.'));
+    return;
+  }
   const number = $id('sl-number').value.trim();
   if (number === state.callFlow.settings.internal_number) return;
   confirmDialog(t('sl_ChangeNumberTitle', 'Change the Number?'),
@@ -612,7 +655,7 @@ function statusRow(s, index, all) {
 /** The first-run question, or the template list later: one card per business type. */
 function templatePicker(firstRun) {
   return el('div', { class: 'sl-templates' },
-    el('h4', { class: 'ui header', text: firstRun ? t('sl_FirstRunTitle', 'What kind of business is this?') : t('sl_AddFromTemplateTitle', 'Add Statuses from a Template') }),
+    el('h4', { class: 'ui header', text: firstRun ? t('sl_FirstRunTitle', 'What Kind of Business Is This?') : t('sl_AddFromTemplateTitle', 'Add Statuses from a Template') }),
     el('div', { class: 'sl-note sl-narrow', text: firstRun
       ? t('sl_FirstRunHint', 'A template adds the statuses that business usually needs, with the wording to record for each, and sets how long IDs are. Everything can be changed afterwards.')
       : t('sl_AddFromTemplateHint', 'Only statuses you don\'t have yet (by code) are added; nothing is changed or deleted.') }),
@@ -623,11 +666,11 @@ function templatePicker(firstRun) {
         ? plural('sl_TemplateIdExact', tpl.id_length[0], { one: 'IDs of {n} digit', other: 'IDs of {n} digits' })
         : sub(t('sl_TemplateIdLength', 'IDs of {min}–{max} digits'), { min: tpl.id_length[0], max: tpl.id_length[1] }) }),
       tpl.statuses.length ? el('ul', { class: 'sl-template-statuses' }, tpl.statuses.map((x) => el('li', { text: x.name }))) : null,
-      el('button', { class: 'ui basic button', type: 'button', onclick: () => applyTemplate(tpl) }, t('sl_UseTemplate', 'Use This Template'))))));
+      el('button', { class: 'ui basic button', type: 'button', onclick: (e) => applyTemplate(tpl, e.currentTarget) }, t('sl_UseTemplate', 'Use This Template'))))));
 }
 
-function applyTemplate(tpl) {
-  post('applyTemplate', { key: tpl.key })
+function applyTemplate(tpl, button) {
+  busy(button, () => post('applyTemplate', { key: tpl.key })
     .then((d) => {
       state.showTemplates = false;
       state.template = state.template || tpl.key;
@@ -638,7 +681,7 @@ function applyTemplate(tpl) {
         })));
       }
     })
-    .fail((xhr) => showError(saveFailed(xhr)));
+    .fail((xhr) => showError(saveFailed(xhr))));
 }
 
 /** A text file with each status's wording, for whoever records the sentences. */
@@ -699,7 +742,7 @@ function openStatus(s) {
   const v = s || { code: '', name: '', script: '', prompt_id: '', spoken_extra: 'none', after_action: 'repeat', transfer_number: '' };
   const files = state.options.soundFiles.map((f) => [f.id, f.name]);
   const transferField = field(t('sl_TransferTo', 'Put Through To'),
-    select('sl-status-transfer', destinationOptions(t('sl_ChooseDestination', 'Choose…')), v.transfer_number, { class: 'ui search dropdown' }));
+    select('sl-status-transfer', destinationOptions(t('sl_ChooseDestination', 'Choose…'), v.transfer_number), v.transfer_number, { class: 'ui search dropdown' }));
   const form = $id('sl-status-form');
   fill(form,
     el('div', { class: 'two fields' },
@@ -710,7 +753,7 @@ function openStatus(s) {
     field(t('sl_StatusScript', 'Wording'), el('input', { type: 'text', id: 'sl-status-script', value: v.script || '', maxlength: '300' }),
       t('sl_StatusScriptHint', 'What the sentence says, for whoever records it. Not played to callers.')),
     files.length
-      ? field(t('sl_StatusPrompt', 'Sentence the Caller Hears'), promptControl('sl-status-prompt', v.prompt_id || '', false, []),
+      ? field(t('sl_StatusPrompt', 'Sentence the Caller Hears'), promptControl('sl-status-prompt', v.prompt_id || '', false, [], t('sl_ChooseSoundFile', 'Choose a Sound File…')),
         t('sl_StatusPromptHint', 'Upload a recording of the sentence on the PBX\'s Sound files page, then choose it here. Keep it short: one sentence.'))
       : el('div', { class: 'ui warning message' }, el('p', { text: t('sl_NoSoundFiles', 'The PBX has no sound files yet. Upload a recording of the sentence on its Sound files page first.') })),
     field(t('sl_StatusExtra', 'Then Also Say'), select('sl-status-extra', Object.entries(EXTRAS).map(([k, pair]) => [k, label(pair)]), v.spoken_extra, { class: 'ui dropdown' }),
@@ -742,12 +785,9 @@ function saveStatus(id) {
     after_action: $id('sl-status-after').value,
     transfer_number: $id('sl-status-transfer').value,
   };
-  const button = $id('sl-status-save');
-  button.classList.add('loading');
-  post('saveStatus', { status: JSON.stringify(status) })
+  busy($id('sl-status-save'), () => post('saveStatus', { status: JSON.stringify(status) })
     .then((d) => { $('#sl-status-modal').modal('hide'); renderStatuses(d.statuses); })
-    .fail((xhr) => showModalError('sl-status-form', saveFailed(xhr)))
-    .always(() => button.classList.remove('loading'));
+    .fail((xhr) => showModalError('sl-status-form', saveFailed(xhr))));
 }
 
 /** An error inside a dialog, above its form, replacing an earlier one. */
@@ -800,8 +840,12 @@ const isoText = (iso) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString(L
 function statusLabel(code) {
   const index = (state.statuses || []).findIndex((s) => s.code === code);
   const status = index >= 0 ? state.statuses[index] : null;
-  return el('span', { class: `ui small ${index >= 0 ? STATUS_COLOURS[index % STATUS_COLOURS.length] : 'basic'} label`, title: code },
+  const label2 = el('span', { class: `ui small ${index >= 0 ? STATUS_COLOURS[index % STATUS_COLOURS.length] : 'basic'} label`, title: code },
     status ? status.name : code);
+  if (!status || status.prompt_id) return label2;
+  // Callers with this status hear the apology and are put through until its sentence is recorded.
+  const text = t('sl_StatusNotRecorded', 'Not recorded yet: callers are put through to a person');
+  return el('span', { class: 'sl-nowrap' }, label2, el('i', { class: 'exclamation triangle icon sl-warn-text', title: text, 'aria-label': text, role: 'img' }));
 }
 
 const statusChoices = (allText) => [...(allText ? [['', allText]] : []), ...(state.statuses || []).map((s) => [s.code, s.name])];
@@ -810,20 +854,27 @@ function recordsToolbar() {
   const search = el('input', { type: 'search', id: 'sl-rec-search', value: records.query.search, placeholder: t('sl_SearchRecords', 'ID or note'), 'aria-label': t('sl_SearchRecords', 'ID or note') });
   search.addEventListener('input', () => {
     clearTimeout(records.timer);
-    records.timer = setTimeout(() => { records.query.search = search.value.trim(); records.query.page = 1; loadRecords(); }, 300);
+    records.timer = setTimeout(() => { records.query.search = search.value; records.query.page = 1; records.selected.clear(); loadRecords(); }, 300);
   });
   const status = select('sl-rec-status', statusChoices(t('sl_AllStatuses', 'All Statuses')), records.query.status, { class: 'ui dropdown', 'aria-label': t('sl_ColStatus', 'Status') });
   const stale = select('sl-rec-stale', [['0', t('sl_AnyUpdate', 'Any Last Change')], ...[7, 30, 90].map((d) => [String(d), plural('sl_NotUpdatedIn', d, { one: 'Not Changed in {n} Day', other: 'Not Changed in {n} Days' })])],
-    records.query.stale, { class: 'ui dropdown', 'aria-label': t('sl_LastChange', 'Last change') });
+    records.query.stale, { class: 'ui dropdown', 'aria-label': t('sl_LastChange', 'Last Change') });
   const expired = el('div', { class: 'ui checkbox' },
     el('input', { type: 'checkbox', id: 'sl-rec-expired', checked: records.query.expired === '1' }), el('label', { for: 'sl-rec-expired', text: t('sl_ExpiredOnly', 'Expired Only') }));
+  // A new filter starts a new selection: "Delete Selected" never reaches rows the admin can't see.
   [status, stale].forEach((node) => node.addEventListener('change', () => {
     records.query.status = status.value;
     records.query.stale = stale.value;
     records.query.page = 1;
+    records.selected.clear();
     loadRecords();
   }));
-  expired.querySelector('input').addEventListener('change', (e) => { records.query.expired = e.target.checked ? '1' : ''; records.query.page = 1; loadRecords(); });
+  expired.querySelector('input').addEventListener('change', (e) => {
+    records.query.expired = e.target.checked ? '1' : '';
+    records.query.page = 1;
+    records.selected.clear();
+    loadRecords();
+  });
   return el('div', { class: 'ui form sl-toolbar' },
     el('div', { class: 'ui left icon input sl-search' }, search, el('i', { class: 'search icon' })), status, stale, expired,
     el('div', { class: 'sl-toolbar-end' },
@@ -835,7 +886,7 @@ function recordsToolbar() {
 function bulkBar() {
   const n = records.selected.size;
   if (!n) return null;
-  const to = select('sl-bulk-status', statusChoices(null), '', { class: 'ui dropdown', 'aria-label': t('sl_NewStatus', 'New status') });
+  const to = select('sl-bulk-status', statusChoices(null), '', { class: 'ui dropdown', 'aria-label': t('sl_NewStatus', 'New Status') });
   return el('div', { class: 'sl-bulk ui form' },
     el('strong', { text: plural('sl_Selected', n, { one: '{n} record selected', other: '{n} records selected' }) }),
     el('div', { class: 'sl-inline' }, to,
@@ -897,21 +948,24 @@ function renderRecords() {
     el('button', { class: 'ui basic button', type: 'button', disabled: d.page <= 1, onclick: () => { records.query.page = d.page - 1; loadRecords(); } }, t('sl_Previous', 'Previous')),
     el('span', { text: sub(t('sl_PageOf', 'Page {page} of {pages}'), { page: count(d.page), pages: count(d.pages) }) }),
     el('button', { class: 'ui basic button', type: 'button', disabled: d.page >= d.pages, onclick: () => { records.query.page = d.page + 1; loadRecords(); } }, t('sl_Next', 'Next'))) : null;
-  const focused = document.activeElement && document.activeElement.id === 'sl-rec-search';
-  fill(box, recordsToolbar(),
+  // The toolbar is built once per visit to the tab, so typing in the search box is never interrupted.
+  if (!$id('sl-rec-toolbar')) {
+    fill(box, el('div', { id: 'sl-rec-toolbar' }, recordsToolbar()), el('div', { id: 'sl-rec-body' }));
+    $('#sl-rec-toolbar select.ui.dropdown').dropdown({ placeholder: false });
+    $('#sl-rec-toolbar .ui.checkbox').checkbox();
+  }
+  const body = $id('sl-rec-body');
+  fill(body,
     d ? el('div', { class: 'sl-note sl-count', text: plural('sl_RecordCount', d.total, { one: '{n} record', other: '{n} records' }) }) : null,
     bulkBar(), table, pager);
-  $(box).find('select.ui.dropdown').dropdown({ placeholder: false });
-  $(box).find('.ui.checkbox').checkbox();
-  if (focused) {
-    const search = $id('sl-rec-search');
-    search.focus();
-    search.setSelectionRange(search.value.length, search.value.length);
-  }
+  $(body).find('select.ui.dropdown').dropdown({ placeholder: false });
 }
 
 function loadRecords() {
+  // Only the newest request is shown: an older reply arriving late is dropped.
+  const seq = (records.seq = (records.seq || 0) + 1);
   return get('records', records.query).then((d) => {
+    if (seq !== records.seq) return;
     records.data = d;
     records.query.page = d.page;
     renderRecords();
@@ -920,7 +974,12 @@ function loadRecords() {
 
 function loadRecordsTab() {
   fill($id('sl-records'), el('div', { class: 'ui active centered inline loader' }));
-  get('statuses').then((d) => { state.statuses = d.statuses; return loadRecords(); });
+  get('statuses').then((d) => {
+    state.statuses = d.statuses;
+    // A status filter for a status that was renamed or deleted meanwhile is dropped.
+    if (records.query.status && !d.statuses.some((x) => x.code === records.query.status)) records.query.status = '';
+    return loadRecords();
+  });
 }
 
 function openRecord(r) {
@@ -941,8 +1000,7 @@ function openRecord(r) {
   $id('sl-record-save').onclick = save;
   $id('sl-record-cancel').onclick = () => $('#sl-record-modal').modal('hide');
   form.onsubmit = (e) => { e.preventDefault(); save(); };
-  $('#sl-record-modal').modal({ autofocus: false }).modal('show');
-  if (!r) $id('sl-record-id').focus();
+  $('#sl-record-modal').modal({ autofocus: false, onVisible: () => { if (!r) $id('sl-record-id').focus(); } }).modal('show');
 }
 
 function saveRecord(id) {
@@ -954,12 +1012,9 @@ function saveRecord(id) {
     status_date: $id('sl-record-date').value,
     expires_on: $id('sl-record-expires').value,
   };
-  const button = $id('sl-record-save');
-  button.classList.add('loading');
-  post('saveRecord', { record: JSON.stringify(record) })
+  busy($id('sl-record-save'), () => post('saveRecord', { record: JSON.stringify(record) })
     .then(() => { $('#sl-record-modal').modal('hide'); return loadRecords(); })
-    .fail((xhr) => showModalError('sl-record-form', saveFailed(xhr)))
-    .always(() => button.classList.remove('loading'));
+    .fail((xhr) => showModalError('sl-record-form', saveFailed(xhr))));
 }
 
 function bulkStatus(code) {
@@ -974,7 +1029,7 @@ function deleteRecords(ids, single) {
     ? sub(t('sl_DeleteRecordText', 'Record {id} will be deleted. Callers who type it will hear "not found".'), { id: single })
     : plural('sl_DeleteRecordsText', ids.length, { one: '{n} record will be deleted.', other: '{n} records will be deleted.' });
   const ok = single ? t('sl_DeleteRecord', 'Delete Record') : plural('sl_DeleteRecordsButton', ids.length, { one: 'Delete {n} Record', other: 'Delete {n} Records' });
-  confirmDialog(t('sl_DeleteRecordsTitle', 'Delete Records?'), text, ok).then((yes) => {
+  confirmDialog(single ? t('sl_DeleteRecordTitle', 'Delete Record?') : t('sl_DeleteRecordsTitle', 'Delete Records?'), text, ok).then((yes) => {
     if (!yes) return;
     post('deleteRecords', { ids: JSON.stringify(ids) })
       .then(() => { ids.forEach((id) => records.selected.delete(id)); return loadRecords(); })
@@ -1006,7 +1061,7 @@ const MODES = {
   replace: ['sl_ModeReplace', 'Replace All', ['sl_ModeReplaceHint', 'The file becomes the full list: records not in it are deleted.']],
 };
 
-const importState = { file: null, preview: null };
+const importState = { file: null, preview: null, mode: 'update' };
 
 const EXAMPLE_CSV = 'lookup_id,status_code,note,pin,expires,date\r\n10445,READY,Toyota Vios,,2026-11-30,\r\n10446,PARTS,iPhone 13 screen,,,\r\n00451,SHIPPED,,,,2026-11-12\r\n';
 
@@ -1024,7 +1079,7 @@ function upload(action) {
   clearError();
   const data = new FormData();
   data.append('file', importState.file);
-  data.append('mode', $id('sl-import-mode').value);
+  data.append('mode', importState.mode);
   return $.ajax({ url: BASE + action, method: 'POST', data, processData: false, contentType: false, dataType: 'json' })
     .then((r) => (r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })));
 }
@@ -1060,8 +1115,9 @@ function renderPreview() {
   if (!p) { fill(box); return; }
   const changes = p.added + p.updated + p.deleted;
   fill(box,
-    el('h4', { class: 'ui header', text: sub(t('sl_PreviewTitle', 'What importing "{file}" will do'), { file: importState.file.name }) }),
+    el('h4', { class: 'ui header', text: sub(t('sl_PreviewTitle', 'What Importing "{file}" Will Do'), { file: importState.file.name }) }),
     countTiles(p),
+    p.kept ? el('div', { class: 'sl-note', text: plural('sl_KeptNote', p.kept, { one: '{n} record not in the file is kept, because its row was left out. Fix the row and import again to change it.', other: '{n} records not in the file are kept, because their rows were left out. Fix the rows and import again to change them.' }) }) : null,
     rejectTable(p.report, p.rejected),
     el('div', { class: 'sl-inline sl-import-actions' },
       el('button', { class: 'ui primary button', type: 'button', id: 'sl-import-apply', disabled: changes === 0, onclick: applyImport },
@@ -1075,28 +1131,21 @@ function checkFile() {
     showError(t('sl_ChooseFile', 'Choose a CSV file first.'));
     return;
   }
-  const button = $id('sl-import-check');
-  button.classList.add('loading');
-  upload('importPreview')
+  busy($id('sl-import-check'), () => upload('importPreview')
     .then((p) => { importState.preview = p; renderPreview(); })
-    .fail((xhr) => showError(saveFailed(xhr)))
-    .always(() => button.classList.remove('loading'));
+    .fail((xhr) => showError(saveFailed(xhr))));
 }
 
 function applyImport() {
   const p = importState.preview;
-  const go = () => {
-    const button = $id('sl-import-apply');
-    button.classList.add('loading');
-    upload('importApply')
-      .then((r) => {
-        importState.preview = null;
-        importState.file = null;
-        renderImport(r);
-        loadImports();
-      })
-      .fail((xhr) => { button.classList.remove('loading'); showError(saveFailed(xhr)); });
-  };
+  const go = () => busy($id('sl-import-apply'), () => upload('importApply')
+    .then((r) => {
+      importState.preview = null;
+      importState.file = null;
+      renderImport(r);
+      loadImports();
+    })
+    .fail((xhr) => showError(saveFailed(xhr))));
   if (!p.deleted) { go(); return; }
   confirmDialog(t('sl_ReplaceTitle', 'Delete Records Not in the File?'),
     plural('sl_ReplaceText', p.deleted, { one: '{n} record isn\'t in the file and will be deleted. Callers who type its ID will hear "not found".', other: '{n} records aren\'t in the file and will be deleted. Callers who type their IDs will hear "not found".' }),
@@ -1112,7 +1161,11 @@ function chooseFile(file) {
 
 function renderImport(done) {
   const input = el('input', { type: 'file', id: 'sl-import-file', accept: '.csv,text/csv', class: 'sl-visually-hidden' });
-  input.addEventListener('change', () => chooseFile(input.files[0]));
+  input.addEventListener('change', () => {
+    chooseFile(input.files[0]);
+    // So the same file can be chosen again after it was edited.
+    input.value = '';
+  });
   const drop = el('label', { class: 'sl-drop', for: 'sl-import-file' },
     el('i', { class: 'big file alternate outline icon' }),
     el('div', { class: 'sl-drop-text', text: t('sl_DropFile', 'Drop a CSV file here, or click to choose one') }),
@@ -1121,10 +1174,15 @@ function renderImport(done) {
   ['dragenter', 'dragover'].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.add('sl-drag'); }));
   ['dragleave', 'drop'].forEach((type) => drop.addEventListener(type, () => drop.classList.remove('sl-drag')));
   drop.addEventListener('drop', (e) => { e.preventDefault(); chooseFile(e.dataTransfer.files[0]); });
-  const mode = select('sl-import-mode', Object.entries(MODES).map(([k, m]) => [k, label(m)]), 'update', { class: 'ui dropdown' });
+  const mode = select('sl-import-mode', Object.entries(MODES).map(([k, m]) => [k, label(m)]), importState.mode, { class: 'ui dropdown' });
   const modeHint = el('div', { class: 'sl-note', id: 'sl-import-mode-hint' });
-  const showModeHint = () => { modeHint.textContent = label(MODES[mode.value][2]); importState.preview = null; renderPreview(); };
-  mode.addEventListener('change', showModeHint);
+  // A new mode needs a new check: the preview always matches the mode that will be imported.
+  mode.addEventListener('change', () => {
+    importState.mode = mode.value;
+    modeHint.textContent = label(MODES[mode.value][2]);
+    importState.preview = null;
+    renderPreview();
+  });
 
   fill($id('sl-import'),
     done ? el('div', { class: 'ui positive message' }, el('p', { text: sub(t('sl_ImportDone', 'Imported: {added} new, {updated} changed, {deleted} deleted, {rejected} left out.'),
@@ -1142,7 +1200,7 @@ function renderImport(done) {
     el('div', { class: 'sl-section-head' }, el('h4', { class: 'ui header', text: t('sl_ImportHistory', 'Past Imports') })),
     el('div', { id: 'sl-import-history' }));
   $(mode).dropdown({ placeholder: false });
-  modeHint.textContent = label(MODES.update[2]);
+  modeHint.textContent = label(MODES[importState.mode][2]);
   renderPreview();
 }
 
@@ -1307,6 +1365,8 @@ function renderActivity(a) {
   const prevRate = pct(prev.deflected, prev.calls);
   const box = $id('sl-activity-body');
   if (!tot.calls) {
+    Object.values(activity.charts).forEach((c) => c.dispose());
+    activity.charts = {};
     fill(box, el('div', { class: 'ui message' }, el('p', { text: t('sl_NoCalls', 'No calls to the lookup line in this period.') })));
     renderCallLog();
     return;
@@ -1430,14 +1490,17 @@ function renderCallLog() {
 }
 
 function loadCallLog() {
+  // Only the newest request is shown: an older reply arriving late is dropped.
+  const seq = (activity.logSeq = (activity.logSeq || 0) + 1);
   return get('callLog', { from: activity.from, to: activity.to, outcome: activity.outcome, page: activity.page })
-    .then((d) => { activity.log = d; renderCallLog(); });
+    .then((d) => { if (seq === activity.logSeq) { activity.log = d; renderCallLog(); } });
 }
 
 function loadActivity() {
   clearError();
   activity.page = 1;
-  get('activity', { from: activity.from, to: activity.to }).then(renderActivity);
+  const seq = (activity.seq = (activity.seq || 0) + 1);
+  get('activity', { from: activity.from, to: activity.to }).then((a) => { if (seq === activity.seq) renderActivity(a); });
   loadCallLog();
 }
 
@@ -1465,6 +1528,8 @@ function updateTabsOverflow() {
 const TABS = { records: loadRecordsTab, import: loadImportTab, activity: loadActivityTab, statuses: loadStatuses, callflow: loadCallFlow };
 
 function selectTab(tab) {
+  // Clicking the open Call Flow tab again would reload it over unsaved changes.
+  if (tab === state.tab && tab === 'callflow' && state.dirty) return;
   if (state.tab === 'callflow' && tab !== 'callflow' && state.dirty) {
     confirmDialog(t('sl_LeaveTitle', 'Leave Without Saving?'), t('sl_LeaveText', 'Your changes to the call flow will be lost.'), t('sl_Leave', 'Leave'))
       .then((ok) => { if (ok) { state.dirty = false; selectTab(tab); } });

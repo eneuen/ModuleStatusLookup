@@ -45,7 +45,7 @@ final class ImporterTest extends TestCase
             . "\r\n";
         $importer = self::importer($csv);
         $preview = $importer->preview($this->db, 'update');
-        self::assertSame(['added' => 1, 'updated' => 1, 'unchanged' => 1, 'deleted' => 0, 'rejected' => 0, 'report' => []], $preview);
+        self::assertSame(['added' => 1, 'updated' => 1, 'unchanged' => 1, 'deleted' => 0, 'kept' => 0, 'rejected' => 0, 'report' => []], $preview);
         self::assertSame(['10445', '20001', '30001'], $this->ids(), 'a preview changes nothing');
 
         $importer->apply($this->db, 'update', 'admin', 'shop.csv', self::NOW);
@@ -133,8 +133,39 @@ final class ImporterTest extends TestCase
     public function testRowLimit(): void
     {
         $csv = "lookup_id,status_code\n" . str_repeat("10445,READY\n", Importer::MAX_ROWS + 1);
-        $this->expectException(EditorException::class);
-        self::importer($csv);
+        try {
+            self::importer($csv);
+            self::fail('accepted');
+        } catch (EditorException $e) {
+            self::assertSame('file_rows', $e->errorCode);
+        }
+    }
+
+    public function testReplaceKeepsRecordsWhoseRowWasLeftOut(): void
+    {
+        // 20001 has a typo in its date: its record must not be deleted.
+        $importer = self::importer("lookup_id,status_code,expires\n10445,READY,\n20001,PARTS,30/11/2026\n");
+        $preview = $importer->preview($this->db, 'replace');
+        self::assertSame([1, 1, 1], [$preview['deleted'], $preview['kept'], $preview['rejected']]);
+        $importer->apply($this->db, 'replace', 'admin', 'x.csv', self::NOW);
+        self::assertSame(['10445', '20001'], $this->ids());
+    }
+
+    public function testBlankLinesBeforeTheHeader(): void
+    {
+        self::assertSame(1, self::importer("\r\n\r\nlookup_id,status_code\n40001,READY\n")->preview($this->db, 'update')['added']);
+    }
+
+    public function testNoteStartingWithAnApostropheSurvivesTheRoundTrip(): void
+    {
+        $this->db->exec("UPDATE m_StatusLookupRecords SET note = '''=quoted' WHERE lookup_id = '20001'");
+        $out = '';
+        (new \Modules\ModuleStatusLookup\Lib\RecordEditor($this->db, new \DateTimeZone('UTC')))
+            ->export([], self::NOW, function (string $line) use (&$out): void {
+                $out .= $line;
+            });
+        self::assertStringContainsString("''=quoted", $out);
+        self::assertSame(3, self::importer($out)->preview($this->db, 'replace')['unchanged']);
     }
 
     public function testReportIsCapped(): void
@@ -159,6 +190,6 @@ final class ImporterTest extends TestCase
                 $out .= $line;
             });
         $preview = self::importer($out)->preview($this->db, 'replace');
-        self::assertSame(['added' => 0, 'updated' => 0, 'unchanged' => 3, 'deleted' => 0, 'rejected' => 0], array_slice($preview, 0, 5));
+        self::assertSame(['added' => 0, 'updated' => 0, 'unchanged' => 3, 'deleted' => 0, 'kept' => 0, 'rejected' => 0], array_slice($preview, 0, 6));
     }
 }

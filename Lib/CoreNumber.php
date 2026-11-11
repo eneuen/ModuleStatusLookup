@@ -121,7 +121,8 @@ final class CoreNumber
             'number = :number: AND type = :type:',
             'bind' => ['number' => $number, 'type' => Extensions::TYPE_MODULES],
         ]);
-        if ($extension === null || $extension->delete()) {
+        // Only the module's own entry: another module may have taken the number meanwhile.
+        if ($extension === null || !self::isOwn($extension->type, $extension->callerid, $number) || $extension->delete()) {
             return [];
         }
 

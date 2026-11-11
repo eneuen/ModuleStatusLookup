@@ -77,7 +77,9 @@ class StatusLookupConf extends ConfigClass
      */
     public static function requestTestCall(string $extension): void
     {
-        (new BeanstalkClient(self::COMMANDS_TUBE))->publish(json_encode(['command' => self::COMMAND_TEST_CALL, 'extension' => $extension]));
+        (new BeanstalkClient(self::COMMANDS_TUBE))->publish(json_encode([
+            'command' => self::COMMAND_TEST_CALL, 'extension' => $extension, 'requested_at' => time(),
+        ]));
     }
 
     /** Enabling a module doesn't reload the dialplan by itself. */

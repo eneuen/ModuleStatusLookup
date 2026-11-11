@@ -156,6 +156,17 @@ final class RecordEditorTest extends TestCase
         }
     }
 
+    public function testCountOutside(): void
+    {
+        $this->add('10445');
+        $this->add('1044567');
+        $this->add('104456789');
+
+        self::assertSame(0, $this->editor->countOutside(4, 10));
+        self::assertSame(2, $this->editor->countOutside(4, 6));
+        self::assertSame(2, $this->editor->countOutside(6, 7));
+    }
+
     public function testExportInTheImportFormat(): void
     {
         $this->add('00451', ['note' => '=HYPERLINK("x")', 'expires_on' => '2026-11-30']);

@@ -7,7 +7,6 @@ declare(strict_types=1);
 namespace Modules\ModuleStatusLookup\Lib;
 
 use PDO;
-use Throwable;
 
 /**
  * Business templates: a starting set of statuses, with the wording to record
@@ -16,7 +15,8 @@ use Throwable;
  *
  * Applying a template only adds statuses the line doesn't have yet (by
  * code); it never changes or deletes statuses or records. The first
- * template applied also sets the ID lengths and is remembered.
+ * template applied is remembered, and sets the ID lengths when there are no
+ * records yet.
  *
  * A template status that "goes to a person" puts the caller through to the
  * operator destination when one is set; otherwise it offers the repeat menu,
@@ -71,8 +71,7 @@ final class Templates
         $existing = array_flip($db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN));
         $added = [];
         $kept = [];
-        $db->beginTransaction();
-        try {
+        Databases::immediate($db, function () use ($db, $template, $key, $operator, $existing, &$added, &$kept): void {
             $order = (int)$db->query('SELECT COALESCE(MAX(sort_order), 0) FROM m_StatusLookupStatuses')->fetchColumn();
             $insert = $db->prepare("INSERT INTO m_StatusLookupStatuses (code, name, script, prompt_id, spoken_extra, after_action, transfer_number,
                     requires_pin, requires_callerid, sort_order) VALUES (?, ?, ?, NULL, ?, ?, ?, '0', '0', ?)");
@@ -92,13 +91,14 @@ final class Templates
             }
             $settings = Settings::load($db);
             if ($settings['template'] === '') {
-                Settings::save($db, ['template' => $key, 'id_min_length' => $template['id_length'][0], 'id_max_length' => $template['id_length'][1]]);
+                $values = ['template' => $key];
+                // The template's ID lengths only while there are no records: lengths that left records out would make them unreachable.
+                if ((int)$db->query('SELECT COUNT(*) FROM m_StatusLookupRecords')->fetchColumn() === 0) {
+                    $values += ['id_min_length' => $template['id_length'][0], 'id_max_length' => $template['id_length'][1]];
+                }
+                Settings::save($db, $values);
             }
-            $db->commit();
-        } catch (Throwable $e) {
-            $db->rollBack();
-            throw $e;
-        }
+        });
 
         return ['added' => $added, 'kept' => $kept];
     }
