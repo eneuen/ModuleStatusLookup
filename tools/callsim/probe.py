@@ -116,7 +116,7 @@ class Probe:
             return
         wait_dialplan(f"GotoIf($[${{SL_TRIES}} >= {settings['max_tries']}]?too_many)")
         wait_dialplan(f"Set(SL_TARGET={settings['too_many_tries_number']})")
-        wait_dialplan(f"Read(SL_IN,${{SL_ASK}},{settings['id_max_length']},,1,{settings['digit_timeout']})")
+        wait_dialplan(f"Read(SL_IN,${{SL_ASK}},,,1,{settings['digit_timeout']})")
 
     def ensure_route(self):
         """The probe's own inbound route to the lookup line (named so CallSim's teardown removes it)."""
@@ -450,14 +450,50 @@ def miss_limit(p, c):
         p.configure()
 
 
-@scenario("Not active: the line apologises and hangs up.")
+@scenario("Not switched on: the line doesn't answer, so the route moves on; the call is still logged.")
 def inactive(p, c):
     p.configure(active="0")
     try:
         since, log_id = log_size(), p.last_log_id()
-        caller = call_in(p)
-        c.that(closed(caller, 15), "the call ends")
-        check_row(c, p, log_id, outcome="inactive")
+        caller = Line("carrier")
+        caller.dial(PROBE_DID)
+        c.that(wait_event(since, "entry", timeout=10, active="0") is not None, "the call reaches the line")
+        c.that(not connected(caller, 4), "the line doesn't answer")
+        caller.hangup(); pause(2)
+        check_row(c, p, log_id, outcome="inactive", target="")
+    finally:
+        p.configure()
+
+
+@scenario("The lookup script fails (its AGI link is missing): a valid ID sends the caller to the fault destination, "
+          "not to 'not found'.")
+def lookup_script_fails(p, c):
+    link = "/var/lib/asterisk/agi-bin/status_lookup.php"
+    docker("exec", PBX_CONTAINER, "mv", link, link + ".off")
+    try:
+        since, log_id = log_size(), p.last_log_id()
+        caller, fault = call_in(p), Line(FAULT)
+        enter(since, caller, "10445#")
+        c.that(wait_event(since, "lookup", timeout=15, result="fault") is not None, "lookup result: fault")
+        c.that(rang(fault, 15), f"the fault destination {FAULT} rings")
+        caller.hangup(); pause(2)
+        check_row(c, p, log_id, outcome="fault", misses=0, target=FAULT)
+    finally:
+        docker("exec", PBX_CONTAINER, "mv", link + ".off", link)
+
+
+@scenario("The lookup's 2-minute limit: a caller who never types anything is sent to the too-many-tries destination, "
+          "not cut off (takes about 2 minutes).")
+def time_limit(p, c):
+    p.configure(max_tries=9, digit_timeout=30)
+    try:
+        since, log_id = log_size(), p.last_log_id()
+        caller, q1 = call_in(p), Line("302")
+        c.that(wait_event(since, "time_limit", timeout=130) is not None, "the time limit is reached")
+        c.that(rang(q1, 15), "the too-many-tries queue rings")
+        c.that(not closed(caller, 1), "the caller is still connected")
+        caller.hangup(); pause(2)
+        check_row(c, p, log_id, outcome="too_many", target=TOO_MANY, misses=0)
     finally:
         p.configure()
 

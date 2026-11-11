@@ -78,8 +78,6 @@ final class DialplanBuilder
     private string $operator;
     private string $tooMany;
     private string $fault;
-    private int $minLength;
-    private int $maxLength;
     private int $timeout;
     private int $maxTries;
     private string $language;
@@ -103,8 +101,6 @@ final class DialplanBuilder
         $this->operator = self::destination((string)$settings['operator_number']);
         $this->tooMany = self::destination((string)$settings['too_many_tries_number']) ?: $this->operator;
         $this->fault = self::destination((string)$settings['fault_number']) ?: $this->operator;
-        $this->minLength = max(2, min(20, (int)$settings['id_min_length']));
-        $this->maxLength = max($this->minLength, min(20, (int)$settings['id_max_length']));
         $this->timeout = max(1, min(30, (int)$settings['digit_timeout']));
         $this->maxTries = max(1, min(9, (int)$settings['max_tries']));
         $this->active = (string)$settings['active'] === '1' && self::problems($this->prompts, $this->operator) === [];
@@ -159,11 +155,21 @@ final class DialplanBuilder
             return '';
         }
 
-        return "\n[" . self::CONTEXT . "]\n" . self::priorities('s', [...$this->entry(), ...($this->active ? $this->flow() : $this->inactive())])
+        $context = $this->active
+            ? self::priorities('s', [...$this->entry(), ...$this->answer(), ...$this->flow()]) . self::priorities('T', $this->timedOut())
+            : self::priorities('s', [...$this->entry(), ...$this->inactive()]);
+
+        return "\n[" . self::CONTEXT . "]\n" . $context
             . "\n[" . self::CONTEXT_END . "]\n" . self::priorities('s', $this->end());
     }
 
-    /** @return list<string|array{string, string}> */
+    /**
+     * Every visit starts afresh: a caller can come back to the line in the
+     * same call (an IVR menu option that leads back here), and each visit is
+     * logged on its own, with its own tries and misses.
+     *
+     * @return list<string|array{string, string}>
+     */
     private function entry(): array
     {
         return [
@@ -174,7 +180,22 @@ final class DialplanBuilder
             'Set(SL_TRIES=0)',
             'Set(SL_MISSES=0)',
             'Set(SL_REPEATS=0)',
+            'Set(SL_LOGGED=)',
+            'Set(SL_SENT=)',
+            'Set(SL_LEFT=)',
+            'Set(SL_TARGET=)',
+            'Set(SL_RESULT=)',
+            'Set(SL_ID=)',
+            'Set(SL_STATUS=)',
             'Set(CHANNEL(hangup_handler_push)=' . self::CONTEXT_END . ',s,1)',
+            'Verbose(3,SLPROBE event=entry active=' . ($this->active ? '1' : '0') . ' ' . self::COMMON . ')',
+        ];
+    }
+
+    /** @return list<string|array{string, string}> */
+    private function answer(): array
+    {
+        return [
             // As the core's IVR menus: a row in the call history. No recording: callers type IDs and PINs here.
             'ExecIf($["${CHANNEL(channeltype)}" == "Local"]?Gosub(set_orign_chan,s,1))',
             "Set(APPEXTEN=$this->number)",
@@ -184,12 +205,13 @@ final class DialplanBuilder
             'Answer()',
             'Set(TIMEOUT(absolute)=' . self::MAX_SECONDS . ')',
             "Set(CHANNEL(language)=$this->language)",
-            'Verbose(3,SLPROBE event=entry active=' . ($this->active ? '1' : '0') . ' ' . self::COMMON . ')',
         ];
     }
 
     /**
-     * Not active yet (or misconfigured): an apology, then hang up.
+     * Not switched on yet (or misconfigured): the line doesn't answer, so an
+     * incoming route goes on to its next rule or default action as it would
+     * for an unanswered destination. The call is still logged.
      *
      * @return list<string|array{string, string}>
      */
@@ -197,8 +219,25 @@ final class DialplanBuilder
     {
         return [
             'Set(SL_OUTCOME=inactive)',
-            $this->prompts['fault'] !== null ? 'Playback(' . $this->prompts['fault'] . ')' : 'Playback(beeperr)',
             'Hangup()',
+        ];
+    }
+
+    /**
+     * The lookup's own time limit ran out: a caller who heard their status is
+     * said goodbye to; anyone else goes to the too-many-tries destination,
+     * never just cut off.
+     *
+     * @return list<string|array{string, string}>
+     */
+    private function timedOut(): array
+    {
+        return [
+            'Verbose(3,SLPROBE event=time_limit outcome=${SL_OUTCOME} ' . self::COMMON . ')',
+            // Time to play the last prompts; cleared again before the caller is sent on.
+            'Set(TIMEOUT(absolute)=30)',
+            'GotoIf($["${SL_OUTCOME}" == "hit"]?s,goodbye)',
+            'Goto(s,too_many)',
         ];
     }
 
@@ -219,15 +258,23 @@ final class DialplanBuilder
             "Set(SL_ASK=$first)",
             ['ask', "GotoIf(\$[\${SL_TRIES} >= $this->maxTries]?too_many)"],
             'Set(SL_TRIES=$[${SL_TRIES} + 1])',
-            "Read(SL_IN,\${SL_ASK},$this->maxLength,,1,$this->timeout)",
+            // No digit limit: the ID ends with # or the timeout, so extra digits never spill into the next try.
+            "Read(SL_IN,\${SL_ASK},,,1,$this->timeout)",
             "Verbose(3,SLPROBE event=input in=\${FILTER(0-9*#,\${SL_IN})} read=\${READSTATUS} try=\${SL_TRIES} $c)",
             'GotoIf($["${SL_IN}" == "0"]?operator)',
+            // If the script fails before it sets anything, the caller goes to a person, not to "not found".
+            'Set(SL_RESULT=fault)',
+            'Set(SL_ID=)',
+            'Set(SL_STATUS=)',
+            'Set(SL_PROMPT=)',
             "AGI($agi,lookup)",
             "Verbose(3,SLPROBE event=lookup result=\${SL_RESULT} id=\${SL_ID} status=\${SL_STATUS} $c)",
             'GotoIf($["${SL_RESULT}" == "hit"]?status)',
             'GotoIf($["${SL_RESULT}" == "rate_limited"]?rate_limited)',
             'GotoIf($["${SL_RESULT}" == "fault"]?fault)',
-            'Set(SL_MISSES=$[${SL_MISSES} + 1])',
+            // Misses are IDs that weren't found, which is what the miss limits count; an empty or
+            // malformed entry only costs a try.
+            'ExecIf($["${SL_RESULT}" != "invalid"]?Set(SL_MISSES=$[${SL_MISSES} + 1]))',
             "Set(SL_MISSED=\${IF(\$[\"\${SL_RESULT}\" == \"invalid\"]?{$p['invalid']}:{$p['not_found']})})",
             "GotoIf(\$[\${SL_TRIES} >= $this->maxTries]?last_miss)",
             "Set(SL_ASK=\${SL_MISSED}&$enter)",
@@ -297,13 +344,15 @@ final class DialplanBuilder
     {
         return [
             'GotoIf($["${SL_LOGGED}" == "1"]?done)',
-            'Set(SL_LOGGED=1)',
             // A caller who hangs up before being handed over reached nobody.
             'ExecIf($["${SL_SENT}" != "1"]?Set(SL_TARGET=))',
             'ExecIf($["${SL_LEFT}x" == "x"]?Set(SL_LEFT=${EPOCH}))',
             'Verbose(3,SLPROBE event=end outcome=${SL_OUTCOME} result=${SL_RESULT} tries=${SL_TRIES} misses=${SL_MISSES} '
                 . 'status=${SL_STATUS} target=${SL_TARGET} ' . self::COMMON . ')',
             'AGI(' . self::END_AGI . ')',
+            // Only once the hand-off ran: a hang-up during it lets the hangup handler try again
+            // (the worker drops a record it already has).
+            'Set(SL_LOGGED=1)',
             ['done', 'Return()'],
         ];
     }

@@ -75,8 +75,7 @@ final class Lookup
         if ($this->rateLimited(self::digits($caller), $missesThisCall, $now)) {
             return ['SL_RESULT' => 'rate_limited'] + $vars;
         }
-        $min = max(2, (int)$this->settings['id_min_length']);
-        $max = max($min, (int)$this->settings['id_max_length']);
+        [$min, $max] = self::idLengths($this->settings);
         if (preg_match('/^[0-9]{' . $min . ',' . $max . '}\z/', $input) !== 1) {
             return ['SL_RESULT' => 'invalid'] + $vars;
         }
@@ -92,8 +91,9 @@ final class Lookup
             return ['SL_RESULT' => 'not_found'] + $vars;
         }
         $today = (new DateTimeImmutable("@$now"))->setTimezone($this->timezone)->format('Y-m-d');
+        // A last day that isn't a YYYY-MM-DD date counts as past: a stale status is worse than none.
         $expires = (string)($row['expires_on'] ?? '');
-        if ($expires !== '' && $expires < $today) {
+        if ($expires !== '' && (preg_match(self::DATE_PATTERN, $expires) !== 1 || $expires < $today)) {
             return ['SL_RESULT' => 'expired'] + $vars;
         }
 
@@ -120,6 +120,21 @@ final class Lookup
             'SL_ACTION'   => $action,
             'SL_TRANSFER' => $action === 'transfer' ? $transfer : '',
         ] + $vars;
+    }
+
+    /**
+     * The shortest and longest ID a caller may type: at least 2 digits, so 0
+     * alone always means "speak to someone", and at most 20.
+     *
+     * @param array<string, int|string> $settings
+     *
+     * @return array{int, int}
+     */
+    public static function idLengths(array $settings): array
+    {
+        $min = max(2, min(20, (int)$settings['id_min_length']));
+
+        return [$min, max($min, min(20, (int)$settings['id_max_length']))];
     }
 
     /** Digits only, at most 32 of them: what the module keeps of a caller's number. */

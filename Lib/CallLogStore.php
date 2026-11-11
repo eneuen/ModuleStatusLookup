@@ -25,12 +25,21 @@ final class CallLogStore
 
     /**
      * Stores one call (a Handoff record). Test calls go to the log, flagged,
-     * but not into the daily counts.
+     * but not into the daily counts. A record already stored (the same visit:
+     * linkedid and start time) is dropped: the dialplan hands a call off again
+     * when the caller hung up during the first hand-off.
      *
      * @param array<string, string> $record
+     *
+     * @return bool Whether it was stored.
      */
-    public function record(array $record, DateTimeZone $timezone): void
+    public function record(array $record, DateTimeZone $timezone): bool
     {
+        $seen = $this->db->prepare('SELECT 1 FROM m_StatusLookupCallLog WHERE linkedid = ? AND started_at = ?');
+        $seen->execute([$record['linkedid'], (int)$record['started_at']]);
+        if ($seen->fetchColumn() !== false) {
+            return false;
+        }
         $toPerson = $record['target'] !== '' ? '1' : '0';
         $this->db->beginTransaction();
         try {
@@ -48,6 +57,8 @@ final class CallLogStore
                     ->execute([$day, $record['outcome'], $toPerson, (int)$record['misses']]);
             }
             $this->db->commit();
+
+            return true;
         } catch (Throwable $e) {
             $this->db->rollBack();
             throw $e;

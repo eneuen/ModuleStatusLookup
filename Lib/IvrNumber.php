@@ -47,6 +47,23 @@ final class IvrNumber
     }
 
     /**
+     * The number for a new install: the module's own number left over from an
+     * earlier install (its uninstall could not release it because a route
+     * still pointed at it), so those routes work again; otherwise the default
+     * or the first free one after it.
+     *
+     * @param list<string> $taken Every number already in the core's extensions table.
+     * @param list<string> $leftovers Numbers of MODULES extensions named as this module names its number.
+     */
+    public static function forNewInstall(array $taken, array $leftovers): ?string
+    {
+        $own = array_values(array_filter($leftovers, [self::class, 'isValid']));
+        sort($own, SORT_STRING);
+
+        return $own[0] ?? self::firstFree($taken);
+    }
+
+    /**
      * The name the core's pickers show, as "Module: <callerid>". They show no
      * number, so the name carries it.
      */

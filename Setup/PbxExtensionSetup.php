@@ -42,8 +42,9 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
     /**
      * After the core creates or extends the tables: makes sure the settings
      * row exists and the IVR has a number in the core's extensions table. A
-     * new install takes 2300, or the first free number up to 2399; a kept
-     * database keeps its number. If no number can be had, the install still
+     * new install takes back the number an earlier install left behind
+     * (because a route still pointed at it), else 2300 or the first free
+     * number up to 2399; a kept database keeps its number. If no number can be had, the install still
      * succeeds and the admin chooses one on the module page.
      */
     public function installDB(): bool
@@ -56,7 +57,7 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
             Settings::ensureRow($db);
             $number = (string)Settings::load($db)['internal_number'];
             if ($number === '') {
-                $number = IvrNumber::firstFree(CoreNumber::taken()) ?? '';
+                $number = IvrNumber::forNewInstall(CoreNumber::taken(), CoreNumber::leftovers()) ?? '';
             }
             if ($number !== '') {
                 CoreNumber::register($number);
@@ -115,7 +116,9 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
         }
         $reasons = CoreNumber::unregister($number);
         if ($reasons !== []) {
-            SystemMessages::sysLogMsg(static::class, "Number $number kept: " . implode(' ', $reasons), LOG_WARNING);
+            // The core's reasons are HTML for its own pages.
+            $text = trim((string)preg_replace('/\s+/', ' ', strip_tags(implode(' ', $reasons))));
+            SystemMessages::sysLogMsg(static::class, "Number $number kept, because something still uses it: $text", LOG_WARNING);
         }
     }
 }

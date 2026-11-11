@@ -86,7 +86,7 @@ class StatusLookupConf extends ConfigClass
      */
     public static function timezone(): DateTimeZone
     {
-        $name = (string)PbxSettings::getValueByKey('PBXTimezone');
+        $name = (string)PbxSettings::getValueByKey(PbxSettings::PBX_TIMEZONE);
         try {
             return new DateTimeZone($name !== '' ? $name : self::DEFAULT_TIMEZONE);
         } catch (Throwable) {
@@ -112,8 +112,15 @@ class StatusLookupConf extends ConfigClass
     private function builder(): ?DialplanBuilder
     {
         try {
+            $settings = Settings::load(Databases::openReadOnly(self::moduleDbFile()));
+            $number = (string)$settings['internal_number'];
+            if ($number !== '' && !CoreNumber::isRegistered($number)) {
+                SystemMessages::sysLogMsg(static::class, "The lookup line's number $number is not registered to the module; no dialplan for it.", LOG_WARNING);
+                $settings['internal_number'] = '';
+            }
+
             return new DialplanBuilder(
-                Settings::load(Databases::openReadOnly(self::moduleDbFile())),
+                $settings,
                 (string)PbxSettings::getValueByKey(PbxSettings::PBX_LANGUAGE),
                 Directories::getDir(Directories::AST_SOUNDS_DIR),
                 [self::class, 'promptPath'],

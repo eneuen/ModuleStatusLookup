@@ -38,6 +38,7 @@ final class LookupTest extends TestCase
         $record->execute(['30001', 'NO_PROMPT', '', '']);
         $record->execute(['30002', 'UNKNOWN', '', '']);
         $record->execute(['30003', 'SHIPPED', 'not a date', '']);
+        $record->execute(['30004', 'READY', '', '2099-1-1']);
     }
 
     private function lookup(array $settings = []): Lookup
@@ -92,6 +93,11 @@ final class LookupTest extends TestCase
         self::assertSame('expired', $this->lookup()->find('20001', '', 0, self::NOW + 86400)['SL_RESULT']);
     }
 
+    public function testAMalformedLastDayCountsAsPast(): void
+    {
+        self::assertSame('expired', $this->lookup()->find('30004', '', 0, self::NOW)['SL_RESULT']);
+    }
+
     public function testTransferStatus(): void
     {
         $vars = $this->lookup()->find('20001', '', 0, self::NOW);
@@ -133,6 +139,14 @@ final class LookupTest extends TestCase
     public function testMinimumLengthIsAtLeastTwo(): void
     {
         self::assertSame('invalid', $this->lookup(['id_min_length' => 1])->find('7', '', 0, self::NOW)['SL_RESULT']);
+    }
+
+    public function testIdLengthsAreClampedToWhatTheCallLogAccepts(): void
+    {
+        self::assertSame([2, 20], Lookup::idLengths(['id_min_length' => 0, 'id_max_length' => 99]));
+        self::assertSame([20, 20], Lookup::idLengths(['id_min_length' => 30, 'id_max_length' => 5]));
+        self::assertSame([6, 6], Lookup::idLengths(['id_min_length' => 6, 'id_max_length' => 3]));
+        self::assertSame('invalid', $this->lookup(['id_max_length' => 30])->find(str_repeat('1', 21), '', 0, self::NOW)['SL_RESULT']);
     }
 
     public function testUnusableStatusIsAFault(): void

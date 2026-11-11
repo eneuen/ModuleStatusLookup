@@ -32,6 +32,30 @@ final class CoreNumber
     }
 
     /**
+     * MODULES extensions named exactly as this module names its number,
+     * "Status Lookup (<number>)": numbers an earlier install left behind.
+     *
+     * @return list<string>
+     */
+    public static function leftovers(): array
+    {
+        $numbers = [];
+        $rows = Extensions::find([
+            'type = :type:',
+            'bind'    => ['type' => Extensions::TYPE_MODULES],
+            'columns' => 'number, callerid',
+        ])->toArray();
+        foreach ($rows as $row) {
+            $number = (string)$row['number'];
+            if ((string)$row['callerid'] === IvrNumber::callerId(self::LABEL, $number)) {
+                $numbers[] = $number;
+            }
+        }
+
+        return $numbers;
+    }
+
+    /**
      * Creates or updates the extension for the IVR's number.
      *
      * @throws RuntimeException When another extension already uses it, or it can't be saved.
@@ -42,7 +66,7 @@ final class CoreNumber
             throw new RuntimeException("Not a valid internal number: $number");
         }
         $extension = Extensions::findFirstByNumber($number);
-        if ($extension !== null && $extension->type !== Extensions::TYPE_MODULES) {
+        if ($extension !== null && !self::isOwn($extension->type, $extension->callerid, $number)) {
             throw new RuntimeException("The number $number is already used by another extension.");
         }
         $extension ??= new Extensions();
@@ -56,6 +80,24 @@ final class CoreNumber
         if (!$extension->save()) {
             throw new RuntimeException('The number could not be saved: ' . implode(' ', array_map('strval', $extension->getMessages())));
         }
+    }
+
+    /**
+     * Whether the core's extensions table holds this number as the module's
+     * own: a MODULES extension named as the module names it. The hooks write
+     * the line's dialplan only then, so a number another extension or module
+     * has taken never gets a second entry in [internal].
+     */
+    public static function isRegistered(string $number): bool
+    {
+        $extension = Extensions::findFirstByNumber($number);
+
+        return $extension !== null && self::isOwn($extension->type, $extension->callerid, $number);
+    }
+
+    private static function isOwn(?string $type, ?string $callerId, string $number): bool
+    {
+        return $type === Extensions::TYPE_MODULES && $callerId === IvrNumber::callerId(self::LABEL, $number);
     }
 
     /**

@@ -6,7 +6,6 @@ declare(strict_types=1);
 
 namespace Modules\ModuleStatusLookup\Lib;
 
-use DateTimeZone;
 use InvalidArgumentException;
 use MikoPBX\Core\System\BeanstalkClient;
 use MikoPBX\Core\System\SystemMessages;
@@ -48,27 +47,12 @@ class WorkerStatusLookup extends WorkerBase
     {
         try {
             $record = Handoff::decode($message->getBody());
-            $this->store->record($record, $this->timezone());
+            $this->store->record($record, StatusLookupConf::timezone());
         } catch (InvalidArgumentException $e) {
             SystemMessages::sysLogMsg(static::class, 'Call record rejected: ' . $e->getMessage(), LOG_WARNING);
         } catch (Throwable $e) {
             // Logged, not rethrown: a rethrow would bury the job and stop nothing.
             SystemMessages::sysLogMsg(static::class, 'Storing a call record failed: ' . $e->getMessage(), LOG_ERR);
-        }
-    }
-
-    /**
-     * The PBX's time zone, read afresh: a long-running worker keeps the zone
-     * it started with.
-     */
-    private function timezone(): DateTimeZone
-    {
-        try {
-            $core = Databases::openReadOnly((string)$this->di->getShared('config')->path('database.dbfile'));
-
-            return new DateTimeZone(Databases::coreSetting($core, 'PBXTimezone', date_default_timezone_get()));
-        } catch (Throwable) {
-            return new DateTimeZone(date_default_timezone_get());
         }
     }
 }

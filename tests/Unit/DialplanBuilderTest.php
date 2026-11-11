@@ -72,7 +72,7 @@ final class DialplanBuilderTest extends TestCase
         $conf = self::builder()->contexts();
 
         self::assertStringContainsString('Set(SL_ASK=modulestatuslookup-welcome&modulestatuslookup-enter-id)', $conf);
-        self::assertStringContainsString('Read(SL_IN,${SL_ASK},10,,1,5)', $conf);
+        self::assertStringContainsString('Read(SL_IN,${SL_ASK},,,1,5)', $conf);
         self::assertStringContainsString('Read(SL_KEY,modulestatuslookup-repeat,1,,1,5)', $conf);
     }
 
@@ -97,16 +97,51 @@ final class DialplanBuilderTest extends TestCase
         }
     }
 
-    public function testInactiveLineApologisesAndHangsUp(): void
+    public function testInactiveLineDoesntAnswerSoTheRouteMovesOn(): void
     {
         foreach ([['active' => '0'], ['operator_number' => ''], ['operator_number' => '20,1']] as $settings) {
             $b = self::builder($settings);
             $conf = $b->contexts();
             self::assertFalse($b->isActive());
-            self::assertStringContainsString('Set(SL_OUTCOME=inactive)', $conf);
-            self::assertStringContainsString('Playback(modulestatuslookup-fault)', $conf);
-            self::assertStringNotContainsString('Read(', $conf);
+            self::assertStringContainsString("Set(SL_OUTCOME=inactive)\n\tsame => n,Hangup()", $conf);
+            // Still logged.
+            self::assertStringContainsString('Set(CHANNEL(hangup_handler_push)=status-lookup-end,s,1)', $conf);
+            foreach (['Answer()', 'set-answer-state', 'dial_app', 'Read(', 'Playback('] as $absent) {
+                self::assertStringNotContainsString($absent, $conf);
+            }
         }
+    }
+
+    public function testEveryVisitStartsAfresh(): void
+    {
+        $conf = self::builder()->contexts();
+
+        foreach (['SL_LOGGED', 'SL_SENT', 'SL_LEFT', 'SL_TARGET', 'SL_RESULT', 'SL_ID', 'SL_STATUS'] as $var) {
+            self::assertStringContainsString("Set($var=)", $conf);
+        }
+        self::assertLessThan(strpos($conf, 'hangup_handler_push'), strpos($conf, 'Set(SL_LOGGED=)'));
+    }
+
+    public function testAFailedLookupScriptCountsAsAFault(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString("Set(SL_RESULT=fault)\n\tsame => n,Set(SL_ID=)\n\tsame => n,Set(SL_STATUS=)\n\tsame => n,Set(SL_PROMPT=)\n\tsame => n,AGI(status_lookup.php,lookup)", $conf);
+    }
+
+    public function testOnlyIdsNotFoundCountAsMisses(): void
+    {
+        self::assertStringContainsString('ExecIf($["${SL_RESULT}" != "invalid"]?Set(SL_MISSES=$[${SL_MISSES} + 1]))', self::builder()->contexts());
+    }
+
+    public function testTimeLimitSendsTheCallerOnInsteadOfHangingUp(): void
+    {
+        $conf = self::builder()->contexts();
+
+        self::assertStringContainsString("exten => T,1,Verbose(", $conf);
+        self::assertStringContainsString("Set(TIMEOUT(absolute)=30)\n\tsame => n,GotoIf(\$[\"\${SL_OUTCOME}\" == \"hit\"]?s,goodbye)\n\tsame => n,Goto(s,too_many)", $conf);
+        // The time-limit extension belongs to the lookup context, before the hand-off context.
+        self::assertLessThan(strpos($conf, '[status-lookup-end]'), strpos($conf, 'exten => T,1'));
     }
 
     public function testDestinationsDefaultToTheOperator(): void
@@ -130,10 +165,10 @@ final class DialplanBuilderTest extends TestCase
 
     public function testLimitsAreClamped(): void
     {
-        $conf = self::builder(['max_tries' => 50, 'digit_timeout' => 0, 'id_min_length' => 1, 'id_max_length' => 99])->contexts();
+        $conf = self::builder(['max_tries' => 50, 'digit_timeout' => 0])->contexts();
 
         self::assertStringContainsString('GotoIf($[${SL_TRIES} >= 9]?too_many)', $conf);
-        self::assertStringContainsString('Read(SL_IN,${SL_ASK},20,,1,1)', $conf);
+        self::assertStringContainsString('Read(SL_IN,${SL_ASK},,,1,1)', $conf);
     }
 
     public function testCallersCanInterruptPrompts(): void
@@ -168,6 +203,8 @@ final class DialplanBuilderTest extends TestCase
 
         self::assertStringContainsString("[status-lookup-end]\nexten => s,1,GotoIf(\$[\"\${SL_LOGGED}\" == \"1\"]?done)", $conf);
         self::assertSame(1, substr_count($conf, 'AGI(status_lookup_end.php)'));
+        // Marked as logged only after the hand-off ran.
+        self::assertLessThan(strpos($conf, 'Set(SL_LOGGED=1)'), strpos($conf, 'AGI(status_lookup_end.php)'));
         // The destination is only logged once the caller is handed over.
         self::assertStringContainsString('ExecIf($["${SL_SENT}" != "1"]?Set(SL_TARGET=))', $conf);
         self::assertStringContainsString("Set(SL_SENT=1)\n\tsame => n,Gosub(status-lookup-end,s,1)", $conf);

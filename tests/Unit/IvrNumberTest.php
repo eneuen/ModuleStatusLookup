@@ -27,6 +27,13 @@ final class IvrNumberTest extends TestCase
         self::assertNull(IvrNumber::firstFree(array_map('strval', range(2300, 2399))));
     }
 
+    public function testNewInstallTakesBackItsLeftoverNumber(): void
+    {
+        self::assertSame('2300', IvrNumber::forNewInstall(['201', '2300'], ['2300']));
+        self::assertSame('2305', IvrNumber::forNewInstall(['2300', '2305'], ['2305', 'x']));
+        self::assertSame('2301', IvrNumber::forNewInstall(['2300'], []));
+    }
+
     /** @return iterable<string, array{string, bool}> */
     public static function numbers(): iterable
     {

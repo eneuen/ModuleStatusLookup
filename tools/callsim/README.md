@@ -64,7 +64,9 @@ If the phones don't register during `setup`, they may have tried before the PBX 
 | `no_fall_through` | After goodbye the call ends: no fall-through to the route's default action, no phone rings |
 | `transfer_from_phone` | A phone blind-transfers a caller to the lookup line, where they look up an ID |
 | `miss_limit` | After two misses (limit 2), the caller's next call goes straight to the operator |
-| `inactive` | A line that isn't switched on apologises and hangs up |
+| `inactive` | A line that isn't switched on doesn't answer, so the route moves on; the call is still logged |
+| `lookup_script_fails` | With the lookup script's link missing, a valid ID sends the caller to the fault destination |
+| `time_limit` | A caller who never types is sent to the too-many-tries destination at the 2-minute limit (takes about 2 minutes) |
 
 Every scenario that completes a call also checks the one call-log row the worker wrote for it.
 
