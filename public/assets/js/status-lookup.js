@@ -21,7 +21,13 @@
   }
   var fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c !== null && c !== void 0 && c !== false));
   var LOCALE = document.documentElement.lang || void 0;
+  var count = (n) => Number(n).toLocaleString(LOCALE);
   var sub = (text, values) => Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), text);
+  function plural(key, n, fallbacks, values = {}) {
+    const form = new Intl.PluralRules(LOCALE).select(n);
+    const text = globalTranslate && (globalTranslate[`${key}_${form}`] || globalTranslate[`${key}_other`]) || fallbacks[form] || fallbacks.other;
+    return sub(text, { n: count(n), ...values });
+  }
   var state = { tab: null, options: null, callFlow: null, dirty: false };
   var FIELDS = {
     welcome_prompt_id: ["sl_PromptWelcome", "Welcome"],
@@ -70,6 +76,15 @@
     not_ready: ["sl_Err_not_ready", "The line can't be switched on yet: {problems}"],
     number_format: ["sl_Err_number_format", "Enter 2 to 8 digits, not starting with 0."],
     number_taken: ["sl_Err_number_taken", "{number} is already used in the PBX. Choose another number."],
+    status_gone: ["sl_Err_status_gone", "This status no longer exists. Reload the page."],
+    code_format: ["sl_Err_code_format", "Use 1 to 32 capital letters, digits and _ for the code, such as READY."],
+    code_taken: ["sl_Err_code_taken", "Another status already has the code {code}."],
+    name: ["sl_Err_name", "Enter a name of up to {max} characters."],
+    status_prompt: ["sl_Err_status_prompt", "Choose the sound file with the sentence the caller hears."],
+    status_destination: ["sl_Err_status_destination", "Choose where to put the caller through to."],
+    too_many_statuses: ["sl_Err_too_many_statuses", "Up to {max} statuses."],
+    move_to: ["sl_Err_move_to", "Choose another status to move the records to."],
+    status_in_use: ["sl_Err_status_in_use", "Records still have this status. Choose a status to move them to."],
     number_in_use: ["sl_Err_number_in_use", 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.']
   };
   function failText(xhr, fallback) {
@@ -120,10 +135,11 @@
     hint ? el("div", { class: "sl-note", text: hint }) : null,
     ...content
   );
-  function confirmDialog(title, text, okText) {
+  function confirmDialog(title, text, okText, extra = null) {
     return new Promise((resolve) => {
       $id("sl-confirm-title").textContent = title;
       $id("sl-confirm-text").textContent = text;
+      fill($id("sl-confirm-extra"), extra);
       $id("sl-confirm-ok").textContent = okText;
       let answer = false;
       $("#sl-confirm-modal").modal({
@@ -452,13 +468,205 @@
     fill($id("sl-callflow"), el("div", { class: "ui active centered inline loader" }));
     get("callFlow").then(renderCallFlow);
   }
+  var EXTRAS = {
+    none: ["sl_ExtraNone", "Nothing"],
+    id: ["sl_ExtraId", "The ID, Read Back"],
+    date: ["sl_ExtraDate", "The Record's Date"]
+  };
+  var ACTIONS = {
+    repeat: ["sl_ActionRepeat", "Offer 1 to Repeat, 0 for a Person"],
+    hangup: ["sl_ActionHangup", "Say Goodbye"],
+    transfer: ["sl_ActionTransfer", "Put Straight Through"]
+  };
+  var label = (pair) => t(pair[0], pair[1]);
+  function iconButton(icon, text, onclick, attrs = {}) {
+    return el("button", { class: "ui basic icon button", type: "button", title: text, "aria-label": text, onclick, ...attrs }, el("i", { class: `${icon} icon` }));
+  }
+  var soundName = (id) => {
+    const file = state.options.soundFiles.find((f) => f.id === id);
+    return file ? file.name : null;
+  };
+  var destinationName = (number) => {
+    const d = state.options.destinations.find((x) => x.value === number);
+    return d ? d.name : number;
+  };
+  function afterText(s) {
+    return s.after_action === "transfer" ? `${label(ACTIONS.transfer)}: ${destinationName(s.transfer_number)}` : label(ACTIONS[s.after_action] || ACTIONS.repeat);
+  }
+  function statusRow(s, index, all) {
+    const name = soundName(s.prompt_id);
+    const listen = iconButton("play", t("sl_Listen", "Listen"), (e) => togglePreview(promptFile(s.prompt_id), e.currentTarget));
+    return el(
+      "tr",
+      {},
+      el(
+        "td",
+        { class: "sl-order-cell" },
+        iconButton("arrow up", t("sl_MoveUp", "Move Up"), () => moveStatus(s.id, -1), { disabled: index === 0 }),
+        iconButton("arrow down", t("sl_MoveDown", "Move Down"), () => moveStatus(s.id, 1), { disabled: index === all.length - 1 })
+      ),
+      el("td", {}, el("div", { text: s.name }), el("div", { class: "sl-sub-line sl-code", text: s.code })),
+      el(
+        "td",
+        {},
+        el(
+          "div",
+          { class: "sl-prompt-cell" },
+          name ? listen : null,
+          el("span", { class: name ? "" : "sl-warn-text", text: name || t("sl_PromptGone", "Sound file missing: choose another") })
+        ),
+        s.spoken_extra !== "none" ? el("div", { class: "sl-sub-line", text: `+ ${label(EXTRAS[s.spoken_extra])}` }) : null
+      ),
+      s.after_action === "transfer" && !state.options.destinations.some((d) => d.value === s.transfer_number) ? el("td", { class: "sl-warn-text", text: sub(t("sl_TransferGone", "Put through to {number}, which no longer exists: choose another"), { number: s.transfer_number }) }) : el("td", { text: afterText(s) }),
+      el("td", { class: "sl-num", text: count(s.records) }),
+      el(
+        "td",
+        { class: "sl-actions-cell" },
+        el("button", { class: "ui basic button", type: "button", onclick: () => openStatus(s) }, t("sl_Edit", "Edit")),
+        iconButton("trash alternate outline", t("sl_DeleteStatus", "Delete Status"), () => deleteStatus(s))
+      )
+    );
+  }
+  function renderStatuses(statuses) {
+    state.statuses = statuses;
+    const box = $id("sl-statuses");
+    const head = el(
+      "div",
+      { class: "sl-section-head" },
+      el("h4", { class: "ui header", text: t("sl_StatusesTitle", "Statuses") }),
+      el(
+        "div",
+        { class: "sl-section-actions" },
+        el("button", { class: "ui primary button", type: "button", onclick: () => openStatus(null) }, el("i", { class: "plus icon" }), t("sl_AddStatus", "Add Status\u2026"))
+      )
+    );
+    const intro = el("div", { class: "sl-note sl-narrow", text: t("sl_StatusesHint", "Each status is one recorded sentence the caller hears for their ID, and what happens next. The code is what CSV files and other software use.") });
+    if (!statuses.length) {
+      fill(box, head, intro, el("div", { class: "ui message" }, el("p", { text: t("sl_NoStatuses", 'No statuses yet. Add the ones your business uses, such as "Ready for pickup", with a recording of each sentence.') })));
+      return;
+    }
+    const table = el(
+      "table",
+      { class: "ui very basic table sl-table" },
+      el("thead", {}, el(
+        "tr",
+        {},
+        el("th", { class: "sl-order-cell" }, el("span", { class: "sl-visually-hidden", text: t("sl_Order", "Order") })),
+        el("th", { text: t("sl_ColStatus", "Status") }),
+        el("th", { text: t("sl_ColHears", "Caller Hears") }),
+        el("th", { text: t("sl_ColThen", "Then") }),
+        el("th", { class: "sl-num", text: t("sl_ColRecords", "Records") }),
+        el("th", {})
+      )),
+      el("tbody", {}, statuses.map(statusRow))
+    );
+    fill(box, head, intro, table);
+  }
+  function loadStatuses() {
+    fill($id("sl-statuses"), el("div", { class: "ui active centered inline loader" }));
+    return get("statuses").then((d) => renderStatuses(d.statuses));
+  }
+  function moveStatus(id, step) {
+    post("moveStatus", { id, step }).then((d) => renderStatuses(d.statuses)).fail((xhr) => showError(saveFailed(xhr)));
+  }
+  function openStatus(s) {
+    const v = s || { code: "", name: "", prompt_id: "", spoken_extra: "none", after_action: "repeat", transfer_number: "" };
+    const files = state.options.soundFiles.map((f) => [f.id, f.name]);
+    const transferField = field(
+      t("sl_TransferTo", "Put Through To"),
+      select("sl-status-transfer", destinationOptions(t("sl_ChooseDestination", "Choose\u2026")), v.transfer_number, { class: "ui search dropdown" })
+    );
+    const form = $id("sl-status-form");
+    fill(
+      form,
+      el(
+        "div",
+        { class: "two fields" },
+        field(t("sl_StatusName", "Name"), el("input", { type: "text", id: "sl-status-name", value: v.name, maxlength: "60" }), t("sl_StatusNameHint", "Shown to staff only.")),
+        field(
+          t("sl_StatusCode", "Code"),
+          el("input", { type: "text", id: "sl-status-code", value: v.code, maxlength: "32", class: "sl-code-input" }),
+          s && s.records ? plural("sl_CodeRenameHint", s.records, { one: "Changing it changes it on its {n} record too.", other: "Changing it changes it on its {n} records too." }) : t("sl_StatusCodeHint", "A-Z, 0-9 and _, such as READY.")
+        )
+      ),
+      files.length ? field(
+        t("sl_StatusPrompt", "Sentence the Caller Hears"),
+        promptControl("sl-status-prompt", v.prompt_id || "", false, []),
+        t("sl_StatusPromptHint", "Upload a recording of the sentence on the PBX's Sound files page, then choose it here. Keep it short: one sentence.")
+      ) : el("div", { class: "ui warning message" }, el("p", { text: t("sl_NoSoundFiles", "The PBX has no sound files yet. Upload a recording of the sentence on its Sound files page first.") })),
+      field(
+        t("sl_StatusExtra", "Then Also Say"),
+        select("sl-status-extra", Object.entries(EXTRAS).map(([k, pair]) => [k, label(pair)]), v.spoken_extra, { class: "ui dropdown" }),
+        t("sl_StatusExtraHint", "The date is the one stored with each record, such as a shipping date.")
+      ),
+      field(t("sl_StatusAfter", "After That"), select("sl-status-after", Object.entries(ACTIONS).map(([k, pair]) => [k, label(pair)]), v.after_action, { class: "ui dropdown" })),
+      transferField
+    );
+    const after = $id("sl-status-after");
+    const showTransfer = () => transferField.classList.toggle("sl-hidden", after.value !== "transfer");
+    after.addEventListener("change", showTransfer);
+    showTransfer();
+    initPromptMenus(form);
+    $(form).find("select.ui.dropdown:not(.sl-prompt-select)").dropdown({ fullTextSearch: true, placeholder: false });
+    $id("sl-status-title").textContent = s ? t("sl_EditStatus", "Edit Status") : t("sl_AddStatusTitle", "Add Status");
+    $id("sl-status-save").onclick = () => saveStatus(s ? s.id : null);
+    $id("sl-status-cancel").onclick = () => $("#sl-status-modal").modal("hide");
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      saveStatus(s ? s.id : null);
+    };
+    $("#sl-status-modal").modal({ autofocus: false, onHidden: stopPreview }).modal("show");
+  }
+  function saveStatus(id) {
+    const prompt = $id("sl-status-prompt");
+    const status = {
+      ...id ? { id } : {},
+      name: $id("sl-status-name").value,
+      code: $id("sl-status-code").value,
+      prompt_id: prompt ? prompt.value : "",
+      spoken_extra: $id("sl-status-extra").value,
+      after_action: $id("sl-status-after").value,
+      transfer_number: $id("sl-status-transfer").value
+    };
+    const button = $id("sl-status-save");
+    button.classList.add("loading");
+    post("saveStatus", { status: JSON.stringify(status) }).then((d) => {
+      $("#sl-status-modal").modal("hide");
+      renderStatuses(d.statuses);
+    }).fail((xhr) => showModalError("sl-status-form", saveFailed(xhr))).always(() => button.classList.remove("loading"));
+  }
+  function showModalError(formId, text) {
+    const form = $id(formId);
+    const old = form.querySelector(".sl-modal-error");
+    if (old) old.remove();
+    form.prepend(el("div", { class: "ui negative message sl-modal-error", role: "alert" }, el("p", { text })));
+  }
+  function deleteStatus(s) {
+    const others = state.statuses.filter((x) => x.id !== s.id);
+    let moveTo = null;
+    let extra = null;
+    if (s.records > 0) {
+      if (!others.length) {
+        showError(t("sl_LastStatusInUse", "Records still have this status, and there is no other status to move them to. Add another status first, or delete the records."));
+        return;
+      }
+      moveTo = select("sl-move-to", others.map((x) => [x.id, x.name]), others[0].id, { class: "ui dropdown" });
+      extra = field(t("sl_MoveRecordsTo", "Move Its Records To"), moveTo);
+    }
+    const text = s.records > 0 ? plural("sl_DeleteStatusUsed", s.records, { one: '"{name}" is the status of {n} record. It moves to the status you choose.', other: '"{name}" is the status of {n} records. They move to the status you choose.' }, { name: s.name }) : sub(t("sl_DeleteStatusText", '"{name}" will be deleted.'), { name: s.name });
+    confirmDialog(t("sl_DeleteStatusTitle", "Delete Status?"), text, t("sl_DeleteStatus", "Delete Status"), extra).then((ok) => {
+      if (!ok) return;
+      post("deleteStatus", { id: s.id, move_to: moveTo ? moveTo.value : "" }).then((d) => renderStatuses(d.statuses)).fail((xhr) => showError(saveFailed(xhr)));
+    });
+    if (moveTo) $(moveTo).dropdown();
+  }
   function updateTabsOverflow() {
     const tabs = $id("sl-tabs");
     const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
     tabs.classList.toggle("sl-overflow", overflow);
     tabs.classList.toggle("sl-at-end", overflow && tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
   }
-  var TABS = { callflow: loadCallFlow };
+  var TABS = { statuses: loadStatuses, callflow: loadCallFlow };
   function selectTab(tab) {
     if (state.tab === "callflow" && tab !== "callflow" && state.dirty) {
       confirmDialog(t("sl_LeaveTitle", "Leave Without Saving?"), t("sl_LeaveText", "Your changes to the call flow will be lost."), t("sl_Leave", "Leave")).then((ok) => {
@@ -489,7 +697,7 @@
     get("options").then((options) => {
       state.options = options;
       const asked = new URLSearchParams(window.location.search).get("tab");
-      selectTab(TABS[asked] ? asked : "callflow");
+      selectTab(TABS[asked] ? asked : "statuses");
     });
   }
   $(document).ready(init);

@@ -23,6 +23,7 @@ use Modules\ModuleStatusLookup\Lib\EditorException;
 use Modules\ModuleStatusLookup\Lib\IvrNumber;
 use Modules\ModuleStatusLookup\Lib\PbxOptions;
 use Modules\ModuleStatusLookup\Lib\Settings;
+use Modules\ModuleStatusLookup\Lib\StatusEditor;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
 use PDO;
 use Phalcon\Mvc\Dispatcher;
@@ -146,6 +147,45 @@ class ModuleStatusLookupController extends BaseController
         }, true);
     }
 
+    /** GET statuses: every status in order, with its record count. */
+    public function statusesAction(): void
+    {
+        $this->json(fn (): array => ['statuses' => $this->statusEditor($this->moduleDb())->list()]);
+    }
+
+    /** POST saveStatus: status (JSON object; with id to change one). Read at call time: no reload. */
+    public function saveStatusAction(): void
+    {
+        $this->write(function (): array {
+            $editor = $this->statusEditor($this->writableModuleDb());
+            $id = $editor->save($this->jsonPost('status'));
+
+            return ['id' => $id, 'statuses' => $editor->list()];
+        });
+    }
+
+    /** POST deleteStatus: id, move_to (the status its records move to; optional). */
+    public function deleteStatusAction(): void
+    {
+        $this->write(function (): array {
+            $editor = $this->statusEditor($this->writableModuleDb());
+            $moved = $editor->delete($this->request->getPost('id'), $this->request->getPost('move_to'));
+
+            return ['moved' => $moved, 'statuses' => $editor->list()];
+        });
+    }
+
+    /** POST moveStatus: id, step (-1 up, 1 down). */
+    public function moveStatusAction(): void
+    {
+        $this->write(function (): array {
+            $editor = $this->statusEditor($this->writableModuleDb());
+            $editor->move($this->request->getPost('id'), (int)$this->request->getPost('step'));
+
+            return ['statuses' => $editor->list()];
+        });
+    }
+
     /** 403 for anyone who is not an admin: JSON for AJAX, a page otherwise. */
     public function deniedAction(): void
     {
@@ -177,6 +217,17 @@ class ModuleStatusLookupController extends BaseController
             'usedBy'     => PbxOptions::numberUsers($this->coreDb(), $number),
             'maxSeconds' => DialplanBuilder::MAX_SECONDS,
         ];
+    }
+
+    private function statusEditor(PDO $db): StatusEditor
+    {
+        $number = (string)Settings::load($db)['internal_number'];
+
+        return new StatusEditor(
+            $db,
+            static fn (int $id): bool => $id > 0 && StatusLookupConf::promptPath($id) !== null,
+            array_column(PbxOptions::destinations($this->coreDb(), $number), 'value'),
+        );
     }
 
     private function editor(): CallFlowEditor

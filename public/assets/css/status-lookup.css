@@ -6,7 +6,7 @@
  * the same colours, spacing and type sizes. Text colours keep at least 4.5:1
  * contrast on white.
  */
-.sl-page, #sl-confirm-modal {
+.sl-page, #sl-confirm-modal, #sl-status-modal {
     --sl-primary: #2185d0;      /* blue 5 */
     --sl-text: #1f2933;         /* grey 9 */
     --sl-muted: #616e7c;        /* grey 5, 5.2:1 */
@@ -111,3 +111,42 @@
     .sl-page .sl-section-head { flex-wrap: wrap; }
 }
 .sl-page .ui.form .sl-note + .fields, .sl-page .ui.form .sl-note + .field { margin-top: var(--sl-space-4); }
+
+/* ---------------------------------------------------------------- tables */
+
+/* One quiet style for every table: no header fill or column dividers. */
+.sl-page table.sl-table.ui.table { font-variant-numeric: tabular-nums; }
+.sl-page table.sl-table.ui.table thead th {
+    background: transparent; border-left: none; color: var(--sl-muted);
+    font-size: .85rem; font-weight: 600; white-space: nowrap;
+    border-bottom: 1px solid var(--sl-border); padding-top: var(--sl-space-2); padding-bottom: var(--sl-space-2);
+}
+.sl-page table.sl-table tbody td { border-top-color: var(--sl-border); vertical-align: middle; }
+.sl-page .sl-table td.sl-num, .sl-page .sl-table th.sl-num { text-align: right; white-space: nowrap; }
+.sl-page .sl-sub-line { color: var(--sl-muted); font-size: .85em; margin-top: 2px; }
+.sl-page .sl-code, .sl-page .sl-code-input { font-family: SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; }
+.sl-page .sl-actions-cell { text-align: right !important; white-space: nowrap; }
+.sl-page .sl-actions-cell .ui.button { margin: 0 0 0 var(--sl-space-1); }
+.sl-page .sl-order-cell { width: 1%; white-space: nowrap; }
+.sl-page .sl-order-cell .ui.icon.button { margin: 0; padding: .5em; box-shadow: none !important; }
+.sl-page .sl-prompt-cell { display: flex; align-items: center; gap: var(--sl-space-2); }
+.sl-page .sl-prompt-cell .ui.icon.button { margin: 0; padding: .45em; }
+.sl-page .sl-warn-text { color: var(--sl-warn); }
+.sl-page .sl-visually-hidden, #sl-status-modal .sl-visually-hidden {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+#sl-status-modal .sl-note, #sl-confirm-modal .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-2); }
+#sl-status-modal .sl-code-input { font-family: SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase; }
+/* The status dialog's prompt menu: as on the page (the modal sits outside .sl-page). */
+#sl-status-modal .sl-prompt-control { display: flex; align-items: stretch; gap: var(--sl-space-2); }
+#sl-status-modal .sl-prompt-control > .ui.dropdown { flex: 1 1 auto; min-width: 0; }
+#sl-status-modal .sl-prompt-control > .sl-listen.ui.button { margin: 0; flex: 0 0 auto; }
+#sl-status-modal .sl-prompt-control .menu > .item { display: flex !important; align-items: center; gap: var(--sl-space-2); }
+#sl-status-modal .sl-item-play { margin-left: auto; padding: var(--sl-space-1) var(--sl-space-2); border-radius: 4px; color: var(--sl-muted); cursor: pointer; line-height: 1; }
+#sl-status-modal .sl-item-play:hover, #sl-status-modal .sl-item-play.sl-playing { color: var(--sl-primary); background: var(--sl-surface); }
+#sl-status-modal .sl-item-play i.icon { margin: 0; }
+#sl-confirm-modal .ui.form { margin-top: var(--sl-space-4); }
+
+@media (max-width: 767px) {
+    .sl-page table.sl-table.ui.table thead { display: none !important; }
+}
