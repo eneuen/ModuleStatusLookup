@@ -78,6 +78,13 @@
     not_ready: ["sl_Err_not_ready", "The line can't be switched on yet: {problems}"],
     number_format: ["sl_Err_number_format", "Enter 2 to 8 digits, not starting with 0."],
     number_taken: ["sl_Err_number_taken", "{number} is already used in the PBX. Choose another number."],
+    file_size: ["sl_Err_file_size", "The file is larger than {max} MB. Split it, or import only the records that changed."],
+    file_missing: ["sl_Err_file_missing", "The file didn't arrive. Choose it again."],
+    file_encoding: ["sl_Err_file_encoding", `The file isn't UTF-8 text. In your spreadsheet, save it as "CSV UTF-8".`],
+    file_empty: ["sl_Err_file_empty", "The file is empty."],
+    file_header: ["sl_Err_file_header", "The first row must name the columns, with at least lookup_id and status_code."],
+    file_rows: ["sl_Err_file_rows", "The file has more than {max} rows."],
+    replace_empty: ["sl_Err_replace_empty", "No row in the file can be imported, so Replace All would delete every record. Nothing was changed."],
     lookup_id: ["sl_Err_lookup_id", "Enter the ID as {min} to {max} digits, as callers type it (the lengths are set on the Call Flow tab)."],
     lookup_id_taken: ["sl_Err_lookup_id_taken", "There is already a record with the ID {id}."],
     record_status: ["sl_Err_record_status", "Choose a status from the list."],
@@ -144,10 +151,13 @@
     hint ? el("div", { class: "sl-note", text: hint }) : null,
     ...content
   );
-  function confirmDialog(title, text, okText, extra = null) {
+  function confirmDialog(title, text, okText, extra = null, info = false) {
     return new Promise((resolve) => {
       $id("sl-confirm-title").textContent = title;
       $id("sl-confirm-text").textContent = text;
+      $id("sl-confirm-text").classList.toggle("sl-hidden", text === "");
+      $id("sl-confirm-ok").className = `ui ${info ? "primary" : "red"} button`;
+      $id("sl-confirm-cancel").classList.toggle("sl-hidden", info);
       fill($id("sl-confirm-extra"), extra);
       $id("sl-confirm-ok").textContent = okText;
       let answer = false;
@@ -940,13 +950,272 @@
     const { page, ...query } = records.query;
     window.location.href = `${BASE}exportRecords?${$.param(query)}`;
   }
+  var REJECT_REASONS = {
+    no_id: ["sl_Reject_no_id", "No ID"],
+    id_length: ["sl_Reject_id_length", "ID too short or too long"],
+    duplicate: ["sl_Reject_duplicate", "Same ID as an earlier row (row number in brackets)"],
+    status: ["sl_Reject_status", "Unknown status code"],
+    note: ["sl_Reject_note", "Note longer than 200 characters"],
+    pin: ["sl_Reject_pin", "PINs aren't supported yet"],
+    expires: ["sl_Reject_expires", "Last day isn't a date (YYYY-MM-DD)"],
+    date: ["sl_Reject_date", "Date isn't a date (YYYY-MM-DD)"]
+  };
+  var MODES = {
+    update: ["sl_ModeUpdate", "Add and Update", ["sl_ModeUpdateHint", "New IDs are added and existing ones changed. Records not in the file stay as they are."]],
+    replace: ["sl_ModeReplace", "Replace All", ["sl_ModeReplaceHint", "The file becomes the full list: records not in it are deleted."]]
+  };
+  var importState = { file: null, preview: null };
+  var EXAMPLE_CSV = "lookup_id,status_code,note,pin,expires,date\r\n10445,READY,Toyota Vios,,2026-11-30,\r\n10446,PARTS,iPhone 13 screen,,,\r\n00451,SHIPPED,,,,2026-11-12\r\n";
+  function download(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: filename });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
+  }
+  function upload(action) {
+    clearError();
+    const data = new FormData();
+    data.append("file", importState.file);
+    data.append("mode", $id("sl-import-mode").value);
+    return $.ajax({ url: BASE + action, method: "POST", data, processData: false, contentType: false, dataType: "json" }).then((r) => r && r.success ? r.data : $.Deferred().reject({ responseJSON: r }));
+  }
+  function rejectTable(report, total) {
+    if (!total) return null;
+    return el(
+      "div",
+      {},
+      el(
+        "table",
+        { class: "ui very basic compact table sl-table sl-reject-table" },
+        el("thead", {}, el(
+          "tr",
+          {},
+          el("th", { class: "sl-num", text: t("sl_ColRow", "Row") }),
+          el("th", { text: t("sl_ColId", "ID") }),
+          el("th", { text: t("sl_ColReason", "Why It Was Left Out") })
+        )),
+        el("tbody", {}, report.map((r) => el(
+          "tr",
+          {},
+          el("td", { class: "sl-num", text: count(r.row) }),
+          el("td", { class: "sl-code", text: r.id || "\u2014" }),
+          el("td", { text: REJECT_REASONS[r.reason] ? label(REJECT_REASONS[r.reason]) : r.reason })
+        )))
+      ),
+      total > report.length ? el("div", { class: "sl-note", text: sub(t("sl_ReportCapped", "The first {shown} of {n} rows left out are listed."), { shown: count(report.length), n: count(total) }) }) : null
+    );
+  }
+  function countTiles(p) {
+    const tile = (n, text, kind) => el("div", { class: `sl-tile ${kind || ""}` }, el("div", { class: "sl-tile-value", text: count(n) }), el("div", { class: "sl-tile-label", text }));
+    return el(
+      "div",
+      { class: "sl-tiles" },
+      tile(p.added, t("sl_WillAdd", "New")),
+      tile(p.updated, t("sl_WillUpdate", "Changed")),
+      tile(p.unchanged, t("sl_WillKeep", "Unchanged")),
+      tile(p.deleted, t("sl_WillDelete", "Deleted"), p.deleted ? "sl-tile-bad" : ""),
+      tile(p.rejected, t("sl_WillReject", "Left Out"), p.rejected ? "sl-tile-warn" : "")
+    );
+  }
+  function renderPreview() {
+    const p = importState.preview;
+    const box = $id("sl-import-preview");
+    if (!p) {
+      fill(box);
+      return;
+    }
+    const changes = p.added + p.updated + p.deleted;
+    fill(
+      box,
+      el("h4", { class: "ui header", text: sub(t("sl_PreviewTitle", 'What importing "{file}" will do'), { file: importState.file.name }) }),
+      countTiles(p),
+      rejectTable(p.report, p.rejected),
+      el(
+        "div",
+        { class: "sl-inline sl-import-actions" },
+        el(
+          "button",
+          { class: "ui primary button", type: "button", id: "sl-import-apply", disabled: changes === 0, onclick: applyImport },
+          t("sl_ImportNow", "Import")
+        ),
+        el("button", { class: "ui basic button", type: "button", onclick: () => {
+          importState.preview = null;
+          renderPreview();
+        } }, t("sl_Cancel", "Cancel")),
+        changes === 0 ? el("span", { class: "sl-muted", text: t("sl_NothingToChange", "Nothing would change.") }) : null
+      )
+    );
+  }
+  function checkFile() {
+    if (!importState.file) {
+      showError(t("sl_ChooseFile", "Choose a CSV file first."));
+      return;
+    }
+    const button = $id("sl-import-check");
+    button.classList.add("loading");
+    upload("importPreview").then((p) => {
+      importState.preview = p;
+      renderPreview();
+    }).fail((xhr) => showError(saveFailed(xhr))).always(() => button.classList.remove("loading"));
+  }
+  function applyImport() {
+    const p = importState.preview;
+    const go = () => {
+      const button = $id("sl-import-apply");
+      button.classList.add("loading");
+      upload("importApply").then((r) => {
+        importState.preview = null;
+        importState.file = null;
+        renderImport(r);
+        loadImports();
+      }).fail((xhr) => {
+        button.classList.remove("loading");
+        showError(saveFailed(xhr));
+      });
+    };
+    if (!p.deleted) {
+      go();
+      return;
+    }
+    confirmDialog(
+      t("sl_ReplaceTitle", "Delete Records Not in the File?"),
+      plural("sl_ReplaceText", p.deleted, { one: `{n} record isn't in the file and will be deleted. Callers who type its ID will hear "not found".`, other: `{n} records aren't in the file and will be deleted. Callers who type their IDs will hear "not found".` }),
+      plural("sl_ReplaceButton", p.deleted, { one: "Import and Delete {n} Record", other: "Import and Delete {n} Records" })
+    ).then((ok) => {
+      if (ok) go();
+    });
+  }
+  function chooseFile(file) {
+    importState.file = file || null;
+    importState.preview = null;
+    $id("sl-import-name").textContent = file ? file.name : t("sl_NoFileChosen", "No file chosen");
+    renderPreview();
+  }
+  function renderImport(done) {
+    const input = el("input", { type: "file", id: "sl-import-file", accept: ".csv,text/csv", class: "sl-visually-hidden" });
+    input.addEventListener("change", () => chooseFile(input.files[0]));
+    const drop = el(
+      "label",
+      { class: "sl-drop", for: "sl-import-file" },
+      el("i", { class: "big file alternate outline icon" }),
+      el("div", { class: "sl-drop-text", text: t("sl_DropFile", "Drop a CSV file here, or click to choose one") }),
+      el("div", { class: "sl-drop-name", id: "sl-import-name", text: importState.file ? importState.file.name : t("sl_NoFileChosen", "No file chosen") }),
+      input
+    );
+    ["dragenter", "dragover"].forEach((type) => drop.addEventListener(type, (e) => {
+      e.preventDefault();
+      drop.classList.add("sl-drag");
+    }));
+    ["dragleave", "drop"].forEach((type) => drop.addEventListener(type, () => drop.classList.remove("sl-drag")));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      chooseFile(e.dataTransfer.files[0]);
+    });
+    const mode = select("sl-import-mode", Object.entries(MODES).map(([k, m]) => [k, label(m)]), "update", { class: "ui dropdown" });
+    const modeHint = el("div", { class: "sl-note", id: "sl-import-mode-hint" });
+    const showModeHint = () => {
+      modeHint.textContent = label(MODES[mode.value][2]);
+      importState.preview = null;
+      renderPreview();
+    };
+    mode.addEventListener("change", showModeHint);
+    fill(
+      $id("sl-import"),
+      done ? el("div", { class: "ui positive message" }, el("p", { text: sub(
+        t("sl_ImportDone", "Imported: {added} new, {updated} changed, {deleted} deleted, {rejected} left out."),
+        { added: count(done.added), updated: count(done.updated), deleted: count(done.deleted), rejected: count(done.rejected) }
+      ) })) : null,
+      el(
+        "div",
+        { class: "sl-section-head" },
+        el("h4", { class: "ui header", text: t("sl_ImportTitle", "Import Records") }),
+        el(
+          "div",
+          { class: "sl-section-actions" },
+          el(
+            "button",
+            { class: "ui basic button", type: "button", onclick: () => download("status-lookup-example.csv", new Blob([EXAMPLE_CSV], { type: "text/csv" })) },
+            el("i", { class: "download icon" }),
+            t("sl_DownloadExample", "Download Example")
+          )
+        )
+      ),
+      el("div", { class: "sl-note sl-narrow", text: t("sl_ImportHint", "A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date are optional, as YYYY-MM-DD. Export CSV on the Records tab writes the same format. Nothing changes until you check the file and press Import.") }),
+      el(
+        "div",
+        { class: "ui form sl-import-form" },
+        drop,
+        el(
+          "div",
+          { class: "sl-inline" },
+          field(t("sl_ImportMode", "Mode"), mode),
+          el("button", { class: "ui button", type: "button", id: "sl-import-check", onclick: checkFile }, t("sl_CheckFile", "Check File"))
+        ),
+        modeHint
+      ),
+      el("div", { id: "sl-import-preview" }),
+      el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_ImportHistory", "Past Imports") })),
+      el("div", { id: "sl-import-history" })
+    );
+    $(mode).dropdown({ placeholder: false });
+    modeHint.textContent = label(MODES.update[2]);
+    renderPreview();
+  }
+  function renderHistory(imports) {
+    const box = $id("sl-import-history");
+    if (!imports.length) {
+      fill(box, el("div", { class: "sl-muted", text: t("sl_NoImports", "No imports yet.") }));
+      return;
+    }
+    fill(box, el(
+      "table",
+      { class: "ui very basic table sl-table" },
+      el("thead", {}, el(
+        "tr",
+        {},
+        el("th", { text: t("sl_ColWhen", "When") }),
+        el("th", { text: t("sl_ColFile", "File") }),
+        el("th", { text: t("sl_ImportMode", "Mode") }),
+        el("th", { class: "sl-num", text: t("sl_WillAdd", "New") }),
+        el("th", { class: "sl-num", text: t("sl_WillUpdate", "Changed") }),
+        el("th", { class: "sl-num", text: t("sl_WillDelete", "Deleted") }),
+        el("th", { class: "sl-num", text: t("sl_WillReject", "Left Out") })
+      )),
+      el("tbody", {}, imports.map((i) => el(
+        "tr",
+        {},
+        el("td", {}, el("div", { text: shortDateTime(i.imported_at) }), el("div", { class: "sl-sub-line", text: i.imported_by })),
+        el("td", { class: "sl-note-cell", text: i.file_name }),
+        el("td", { text: MODES[i.mode] ? label(MODES[i.mode]) : i.mode }),
+        el("td", { class: "sl-num", text: count(i.added) }),
+        el("td", { class: "sl-num", text: count(i.updated) }),
+        el("td", { class: "sl-num", text: count(i.deleted) }),
+        el("td", { class: "sl-num" }, i.rejected ? el("a", { href: "#", text: count(i.rejected), onclick: (e) => {
+          e.preventDefault();
+          showRejected(i);
+        } }) : count(i.rejected))
+      )))
+    ));
+  }
+  function showRejected(i) {
+    confirmDialog(sub(t("sl_RejectedTitle", 'Rows Left Out of "{file}"'), { file: i.file_name }), "", t("sl_Close", "Close"), rejectTable(i.report, i.rejected), true);
+  }
+  function loadImports() {
+    get("imports").then((d) => renderHistory(d.imports));
+  }
+  function loadImportTab() {
+    renderImport(null);
+    loadImports();
+  }
   function updateTabsOverflow() {
     const tabs = $id("sl-tabs");
     const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
     tabs.classList.toggle("sl-overflow", overflow);
     tabs.classList.toggle("sl-at-end", overflow && tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
   }
-  var TABS = { records: loadRecordsTab, statuses: loadStatuses, callflow: loadCallFlow };
+  var TABS = { records: loadRecordsTab, import: loadImportTab, statuses: loadStatuses, callflow: loadCallFlow };
   function selectTab(tab) {
     if (state.tab === "callflow" && tab !== "callflow" && state.dirty) {
       confirmDialog(t("sl_LeaveTitle", "Leave Without Saving?"), t("sl_LeaveText", "Your changes to the call flow will be lost."), t("sl_Leave", "Leave")).then((ok) => {

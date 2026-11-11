@@ -173,3 +173,31 @@
 .sl-page .sl-pager .ui.button { margin: 0; }
 #sl-record-modal .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-2); }
 #sl-record-modal .sl-code-input { font-family: SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---------------------------------------------------------------- import */
+
+.sl-page .sl-import-form { max-width: 44rem; margin-top: var(--sl-space-4); }
+.sl-page .sl-drop {
+    display: flex; flex-direction: column; align-items: center; gap: var(--sl-space-2); cursor: pointer;
+    padding: var(--sl-space-6); margin-bottom: var(--sl-space-4); text-align: center;
+    border: 2px dashed var(--sl-border-strong); border-radius: 8px; background: var(--sl-surface); color: var(--sl-muted);
+}
+.sl-page .sl-drop:hover, .sl-page .sl-drop.sl-drag { border-color: var(--sl-primary); color: var(--sl-primary); }
+.sl-page .sl-drop .icon { margin: 0; }
+.sl-page .sl-drop-name { color: var(--sl-text); font-weight: 600; }
+.sl-page #sl-import-preview:not(:empty) {
+    margin-top: var(--sl-space-6); padding: var(--sl-space-4); border: 1px solid var(--sl-border); border-radius: 6px; max-width: 60rem;
+}
+.sl-page #sl-import-preview > .ui.header { margin-top: 0; font-size: 1rem; }
+.sl-page .sl-tiles, #sl-confirm-modal .sl-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sl-space-3); margin-bottom: var(--sl-space-4); }
+@media (max-width: 767px) { .sl-page .sl-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sl-page .sl-tile { border: 1px solid var(--sl-border); border-radius: 6px; padding: var(--sl-space-3) var(--sl-space-4); background: #fff; }
+.sl-page .sl-tile-value { font-size: 1.6rem; font-weight: 700; color: var(--sl-text); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.sl-page .sl-tile-label { color: var(--sl-muted); font-size: .85rem; }
+.sl-page .sl-tile-bad .sl-tile-value { color: var(--sl-bad); }
+.sl-page .sl-tile-warn .sl-tile-value { color: var(--sl-warn); }
+.sl-page .sl-reject-table, #sl-confirm-modal .sl-reject-table { max-height: 20em; overflow-y: auto; display: block; }
+.sl-page .sl-import-actions { margin-top: var(--sl-space-4); }
+#sl-confirm-modal table.sl-table thead th { color: var(--sl-muted); font-size: .85rem; background: transparent; }
+#sl-confirm-modal .sl-num { text-align: right; }
+#sl-confirm-modal .sl-code { font-family: SFMono-Regular, Menlo, Consolas, monospace; }

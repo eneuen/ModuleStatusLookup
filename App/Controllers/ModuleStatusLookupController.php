@@ -20,6 +20,7 @@ use Modules\ModuleStatusLookup\Lib\CoreNumber;
 use Modules\ModuleStatusLookup\Lib\Databases;
 use Modules\ModuleStatusLookup\Lib\DialplanBuilder;
 use Modules\ModuleStatusLookup\Lib\EditorException;
+use Modules\ModuleStatusLookup\Lib\Importer;
 use Modules\ModuleStatusLookup\Lib\IvrNumber;
 use Modules\ModuleStatusLookup\Lib\Lookup;
 use Modules\ModuleStatusLookup\Lib\PbxOptions;
@@ -244,6 +245,33 @@ class ModuleStatusLookupController extends BaseController
         $this->response->setContent($csv);
     }
 
+    /** GET imports: the import history, newest first. */
+    public function importsAction(): void
+    {
+        $this->json(fn (): array => ['imports' => Importer::history($this->moduleDb())]);
+    }
+
+    /** POST importPreview: file (upload), mode. What the import would do; changes nothing. */
+    public function importPreviewAction(): void
+    {
+        $this->write(function (): array {
+            [$importer] = $this->uploadedImport($this->moduleDb());
+
+            return $importer->preview($this->moduleDb(), (string)$this->request->getPost('mode'));
+        });
+    }
+
+    /** POST importApply: file (upload), mode. Applies it in one transaction. Read at call time: no reload. */
+    public function importApplyAction(): void
+    {
+        $this->write(function (): array {
+            $db = $this->writableModuleDb();
+            [$importer, $name] = $this->uploadedImport($db);
+
+            return $importer->apply($db, (string)$this->request->getPost('mode'), $this->currentLogin(), $name, time());
+        });
+    }
+
     /** 403 for anyone who is not an admin: JSON for AJAX, a page otherwise. */
     public function deniedAction(): void
     {
@@ -275,6 +303,31 @@ class ModuleStatusLookupController extends BaseController
             'usedBy'     => PbxOptions::numberUsers($this->coreDb(), $number),
             'maxSeconds' => DialplanBuilder::MAX_SECONDS,
         ];
+    }
+
+    /**
+     * The uploaded CSV, read from PHP's temporary file (never stored) and
+     * checked by Importer, with the file's name for the history.
+     *
+     * @return array{Importer, string}
+     */
+    private function uploadedImport(PDO $db): array
+    {
+        $files = $this->request->getUploadedFiles(true);
+        $file = $files[0] ?? null;
+        // PHP's upload error code (the stubs type it as a string).
+        $error = $file === null ? UPLOAD_ERR_NO_FILE : (int)$file->getError();
+        if ($error !== UPLOAD_ERR_OK) {
+            throw new EditorException(in_array($error, [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true) ? 'file_size' : 'file_missing',
+                ['max' => Importer::MAX_BYTES / 1024 / 1024]);
+        }
+        if ($file->getSize() > Importer::MAX_BYTES) {
+            throw new EditorException('file_size', ['max' => Importer::MAX_BYTES / 1024 / 1024]);
+        }
+        $csv = (string)file_get_contents($file->getTempName());
+        $statuses = $db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN);
+
+        return [new Importer($csv, Lookup::idLengths(Settings::load($db)), array_map('strval', $statuses)), (string)$file->getName()];
     }
 
     private function recordEditor(PDO $db): RecordEditor
