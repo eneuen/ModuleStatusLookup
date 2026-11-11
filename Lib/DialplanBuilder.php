@@ -210,11 +210,16 @@ final class DialplanBuilder
         $agi = self::LOOKUP_AGI;
         $exists = static fn (string $var): string => '${DIALPLAN_EXISTS(internal,${' . $var . '},1)}';
 
+        // Prompts the caller may answer are played by Read(), so a key cuts them short: the
+        // welcome and "not found" come before the ID prompt in the same Read().
+        $enter = $p['enter_id'];
+        $first = $p['welcome'] !== null ? "{$p['welcome']}&$enter" : $enter;
+
         return [
-            $p['welcome'] !== null ? "Playback({$p['welcome']})" : 'NoOp()',
+            "Set(SL_ASK=$first)",
             ['ask', "GotoIf(\$[\${SL_TRIES} >= $this->maxTries]?too_many)"],
             'Set(SL_TRIES=$[${SL_TRIES} + 1])',
-            "Read(SL_IN,{$p['enter_id']},$this->maxLength,,1,$this->timeout)",
+            "Read(SL_IN,\${SL_ASK},$this->maxLength,,1,$this->timeout)",
             "Verbose(3,SLPROBE event=input in=\${FILTER(0-9*#,\${SL_IN})} read=\${READSTATUS} try=\${SL_TRIES} $c)",
             'GotoIf($["${SL_IN}" == "0"]?operator)',
             "AGI($agi,lookup)",
@@ -223,14 +228,17 @@ final class DialplanBuilder
             'GotoIf($["${SL_RESULT}" == "rate_limited"]?rate_limited)',
             'GotoIf($["${SL_RESULT}" == "fault"]?fault)',
             'Set(SL_MISSES=$[${SL_MISSES} + 1])',
-            'GotoIf($["${SL_RESULT}" == "invalid"]?invalid)',
-            "Playback({$p['not_found']})",
+            "Set(SL_MISSED=\${IF(\$[\"\${SL_RESULT}\" == \"invalid\"]?{$p['invalid']}:{$p['not_found']})})",
+            "GotoIf(\$[\${SL_TRIES} >= $this->maxTries]?last_miss)",
+            "Set(SL_ASK=\${SL_MISSED}&$enter)",
             'Goto(ask)',
-            ['invalid', "Playback({$p['invalid']})"],
-            'Goto(ask)',
+            ['last_miss', 'Playback(${SL_MISSED})'],
+            'Goto(too_many)',
 
             ['status', 'Set(SL_OUTCOME=hit)'],
-            ['say', 'Playback(${SL_PROMPT})'],
+            // The status sentence: 0 during it reaches a person.
+            ['say', 'Read(SL_KEY,${SL_PROMPT},1,,1,0.5)'],
+            'GotoIf($["${SL_KEY}" == "0"]?operator)',
             'ExecIf($["${SL_EXTRA}" == "id"]?SayDigits(${SL_ID}))',
             "ExecIf(\$[\"\${SL_EXTRA}\" == \"date\"]?AGI($agi,date))",
             'GotoIf($["${SL_ACTION}" == "transfer"]?transfer)',

@@ -71,8 +71,8 @@ final class DialplanBuilderTest extends TestCase
     {
         $conf = self::builder()->contexts();
 
-        self::assertStringContainsString('Playback(modulestatuslookup-welcome)', $conf);
-        self::assertStringContainsString('Read(SL_IN,modulestatuslookup-enter-id,10,,1,5)', $conf);
+        self::assertStringContainsString('Set(SL_ASK=modulestatuslookup-welcome&modulestatuslookup-enter-id)', $conf);
+        self::assertStringContainsString('Read(SL_IN,${SL_ASK},10,,1,5)', $conf);
         self::assertStringContainsString('Read(SL_KEY,modulestatuslookup-repeat,1,,1,5)', $conf);
     }
 
@@ -81,14 +81,14 @@ final class DialplanBuilderTest extends TestCase
         $conf = self::builder([], 'de_DE')->contexts();
 
         self::assertStringContainsString('Set(CHANNEL(language)=de-de)', $conf);
-        self::assertStringContainsString('Playback(/offload/asterisk/sounds/en-en/modulestatuslookup-welcome)', $conf);
+        self::assertStringContainsString('Set(SL_ASK=/offload/asterisk/sounds/en-en/modulestatuslookup-welcome&', $conf);
     }
 
     public function testOwnSoundFilesAndUnsafePathsRefused(): void
     {
         $paths = [5 => '/storage/media/custom/hello', 6 => '/storage/media/x),Hangup(', 7 => "/storage/a\nb"];
         $conf = self::builder(['welcome_prompt_id' => 5], 'en-en', $paths)->contexts();
-        self::assertStringContainsString('Playback(/storage/media/custom/hello)', $conf);
+        self::assertStringContainsString('Set(SL_ASK=/storage/media/custom/hello&modulestatuslookup-enter-id)', $conf);
 
         foreach ([6, 7, 99, 0] as $bad) {
             $b = self::builder(['enter_id_prompt_id' => $bad], 'en-en', $paths);
@@ -133,7 +133,26 @@ final class DialplanBuilderTest extends TestCase
         $conf = self::builder(['max_tries' => 50, 'digit_timeout' => 0, 'id_min_length' => 1, 'id_max_length' => 99])->contexts();
 
         self::assertStringContainsString('GotoIf($[${SL_TRIES} >= 9]?too_many)', $conf);
-        self::assertStringContainsString('Read(SL_IN,modulestatuslookup-enter-id,20,,1,1)', $conf);
+        self::assertStringContainsString('Read(SL_IN,${SL_ASK},20,,1,1)', $conf);
+    }
+
+    public function testCallersCanInterruptPrompts(): void
+    {
+        $conf = self::builder()->contexts();
+
+        // A miss plays its message and the ID prompt in one Read(), so the caller can type over both.
+        self::assertStringContainsString('Set(SL_MISSED=${IF($["${SL_RESULT}" == "invalid"]?modulestatuslookup-invalid:modulestatuslookup-not-found)})', $conf);
+        self::assertStringContainsString('Set(SL_ASK=${SL_MISSED}&modulestatuslookup-enter-id)', $conf);
+        // After the last try, the message is still played before the caller is sent on.
+        self::assertStringContainsString("(last_miss),Playback(\${SL_MISSED})\n\tsame => n,Goto(too_many)", $conf);
+        // 0 during the status sentence reaches a person.
+        self::assertStringContainsString("(say),Read(SL_KEY,\${SL_PROMPT},1,,1,0.5)\n\tsame => n,GotoIf(\$[\"\${SL_KEY}\" == \"0\"]?operator)", $conf);
+        self::assertStringNotContainsString('Playback(${SL_PROMPT})', $conf);
+    }
+
+    public function testWithoutAWelcomeTheFirstTryAsksStraightAway(): void
+    {
+        self::assertStringContainsString('Set(SL_ASK=modulestatuslookup-enter-id)', self::builder(['welcome_prompt_id' => 0])->contexts());
     }
 
     public function testZeroGoesToAPersonBeforeAnyLookup(): void
