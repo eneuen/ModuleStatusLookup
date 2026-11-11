@@ -1,10 +1,11 @@
 # Dependabot keeps the build and test tooling safe and current.
 #
 # - GitHub Actions: version updates once a month, all in one pull request.
-# - Composer: security updates only, grouped into one pull request per folder.
-#   Version updates are off (open-pull-requests-limit: 0) because these upgrades
-#   are deliberate: the PHPStan setup pins the MikoPBX core release the module
-#   targets.
+# - npm and Composer: security updates only, grouped into one pull request per
+#   ecosystem and folder. Version updates are off (open-pull-requests-limit: 0)
+#   because these upgrades are deliberate: the PHPStan setup pins the MikoPBX
+#   core release the module targets, and an esbuild upgrade means rebuilding the
+#   committed bundle. CI fails a bump whose bundle wasn't rebuilt.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -13,6 +14,16 @@ updates:
       interval: monthly
     groups:
       actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
         patterns: ["*"]
 
   - package-ecosystem: composer

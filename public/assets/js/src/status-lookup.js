@@ -1,0 +1,538 @@
+/*
+ * Status Lookup page (GPL-3.0-or-later).
+ *
+ * Security rules this file follows:
+ * - Every string from the server (sound file and destination names, route
+ *   names, records, notes, caller numbers) is put into the page with
+ *   textContent, never as HTML.
+ * - Writes are AJAX POSTs; the core's TokenManager adds the Bearer token to
+ *   jQuery's $.ajax, and the controller refuses writes without it.
+ * - Nested values are sent as JSON strings and validated on the server; the
+ *   page only shapes them. A refused change comes back as a message code,
+ *   shown here in the admin's language.
+ */
+
+/* global globalRootUrl, globalTranslate, $, TokenManager */
+
+const BASE = `${globalRootUrl}module-status-lookup/`;
+const t = (key, fallback) => (globalTranslate && key in globalTranslate ? globalTranslate[key] : fallback);
+
+/* ------------------------------------------------------------------ helpers */
+
+const $id = (id) => document.getElementById(id);
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  Object.entries(attrs).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === false) return;
+    if (k === 'class') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, '');
+    else node.setAttribute(k, v);
+  });
+  children.flat().forEach((c) => {
+    if (c !== null && c !== undefined && c !== false) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  });
+  return node;
+}
+
+/** Replaces a node's children, skipping null and false (as el() does). */
+const fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+
+/** The admin cabinet's language, which the page sets on <html>; dates and numbers follow it, not the browser's. */
+const LOCALE = document.documentElement.lang || undefined;
+const count = (n) => Number(n).toLocaleString(LOCALE);
+const sub = (text, values) => Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), text);
+
+/**
+ * A count in words: the label key with the language's plural form appended
+ * (sl_X_one, sl_X_few, sl_X_many, sl_X_other), falling back to _other.
+ */
+function plural(key, n, fallbacks, values = {}) {
+  const form = new Intl.PluralRules(LOCALE).select(n);
+  const text = (globalTranslate && (globalTranslate[`${key}_${form}`] || globalTranslate[`${key}_other`])) || fallbacks[form] || fallbacks.other;
+  return sub(text, { n: count(n), ...values });
+}
+
+const state = { tab: null, options: null, callFlow: null, dirty: false };
+
+/* ------------------------------------------------------------------ texts */
+
+/** Field names, for messages that name a field. */
+const FIELDS = {
+  welcome_prompt_id: ['sl_PromptWelcome', 'Welcome'],
+  enter_id_prompt_id: ['sl_PromptEnterId', 'Ask for the ID'],
+  invalid_prompt_id: ['sl_PromptInvalid', 'Invalid Entry'],
+  not_found_prompt_id: ['sl_PromptNotFound', 'Not Found'],
+  repeat_prompt_id: ['sl_PromptRepeat', 'Repeat Menu'],
+  goodbye_prompt_id: ['sl_PromptGoodbye', 'Goodbye'],
+  transfer_prompt_id: ['sl_PromptTransfer', 'Putting Through'],
+  fault_prompt_id: ['sl_PromptFault', 'Apology'],
+  id_min_length: ['sl_IdMinLength', 'Shortest ID'],
+  id_max_length: ['sl_IdMaxLength', 'Longest ID'],
+  digit_timeout: ['sl_DigitTimeout', 'Wait for Keys'],
+  max_tries: ['sl_MaxTries', 'Tries'],
+  miss_limit_caller: ['sl_MissLimitCaller', 'Per Caller Number'],
+  miss_limit_total: ['sl_MissLimitTotal', 'All Callers Together'],
+  operator_number: ['sl_Operator', 'Operator'],
+  too_many_tries_number: ['sl_TooManyTries', 'After the Last Try'],
+  fault_number: ['sl_FaultDestination', 'When a Lookup Fails'],
+};
+const fieldName = (f) => (FIELDS[f] ? t(FIELDS[f][0], FIELDS[f][1]) : f);
+
+/** Why the line isn't answering, by problem code. */
+const PROBLEMS = {
+  no_number: ['sl_Problem_no_number', 'It has no internal number.'],
+  not_registered: ['sl_Problem_not_registered', 'Its number belongs to something else in the PBX. Choose another number.'],
+  no_operator: ['sl_Problem_no_operator', 'Choose where 0 sends callers (the operator).'],
+  gone_too_many_tries_number: ['sl_Problem_gone_too_many', 'The destination after the last try no longer exists.'],
+  gone_fault_number: ['sl_Problem_gone_fault', 'The destination for failed lookups no longer exists.'],
+};
+function problemText(code) {
+  if (PROBLEMS[code]) return t(PROBLEMS[code][0], PROBLEMS[code][1]);
+  const prompt = code.startsWith('prompt_') ? `${code.slice(7)}_prompt_id` : null;
+  if (prompt && FIELDS[prompt]) {
+    return sub(t('sl_Problem_prompt', 'The prompt "{prompt}" can\'t be played. Choose another one.'), { prompt: fieldName(prompt) });
+  }
+  return code;
+}
+
+/** Server message codes, with {placeholders} filled from its params. */
+const ERRORS = {
+  bad_request: ['sl_Err_bad_request', 'The page sent a request the server couldn\'t read. Reload the page and try again.'],
+  failed: ['sl_Err_failed', 'Something went wrong. Try again; if it keeps happening, check the PBX\'s system log.'],
+  refused: ['sl_Err_refused', 'The PBX refused this change. Its system log says why.'],
+  prompt: ['sl_Err_prompt', 'The prompt for "{field}" can\'t be played. Choose another one.'],
+  range: ['sl_Err_range', 'Enter a whole number from {min} to {max} for "{field}".'],
+  whole_number: ['sl_Err_whole_number', 'Enter a whole number for "{field}".'],
+  destination: ['sl_Err_destination', 'Choose "{field}" from the list.'],
+  lengths: ['sl_Err_lengths', 'The shortest ID can\'t be longer than the longest.'],
+  not_ready: ['sl_Err_not_ready', 'The line can\'t be switched on yet: {problems}'],
+  number_format: ['sl_Err_number_format', 'Enter 2 to 8 digits, not starting with 0.'],
+  number_taken: ['sl_Err_number_taken', '{number} is already used in the PBX. Choose another number.'],
+  number_in_use: ['sl_Err_number_in_use', 'Callers are still sent to {number} (see "Where Callers Come From"). Point those elsewhere first, then change the number.'],
+};
+
+function failText(xhr, fallback) {
+  const body = xhr && xhr.responseJSON;
+  const code = body && typeof body.message === 'string' ? body.message : '';
+  if (!ERRORS[code]) return fallback;
+  const params = { ...(body.params || {}) };
+  if (params.field) params.field = fieldName(params.field);
+  if (params.problems) params.problems = params.problems.split(',').map(problemText).join(' ');
+  return sub(t(ERRORS[code][0], ERRORS[code][1]), params);
+}
+
+function showError(text) {
+  const box = $id('sl-error');
+  box.textContent = text;
+  box.classList.remove('sl-hidden');
+  box.scrollIntoView({ block: 'nearest' });
+}
+
+const clearError = () => $id('sl-error').classList.add('sl-hidden');
+const saveFailed = (xhr) => failText(xhr, t('sl_SaveFailed', 'The change could not be saved.'));
+
+function get(action, data = {}) {
+  return $.ajax({ url: BASE + action, method: 'GET', data, dataType: 'json' })
+    .then((r) => (r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })))
+    .fail((xhr) => showError(failText(xhr, t('sl_LoadFailed', 'Status Lookup could not load this data.'))));
+}
+
+function post(action, data) {
+  clearError();
+  return $.ajax({ url: BASE + action, method: 'POST', data, dataType: 'json' })
+    .then((r) => (r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })));
+}
+
+/** A select from [value, text] pairs; an entry { group, options } becomes a labelled group of them. */
+function select(id, options, value, attrs = {}) {
+  const option = ([v, text, extra = {}]) => el('option', { value: String(v), selected: String(v) === String(value ?? ''), ...extra }, text);
+  return el('select', { id, ...attrs }, options.map((o) => (Array.isArray(o) ? option(o) : el('optgroup', { label: o.group }, o.options.map(option)))));
+}
+
+function field(labelText, control, hint, width) {
+  // A prompt control wraps its select with a play button; the label belongs to the select.
+  const target = control.classList.contains('sl-prompt-control') ? control.querySelector('select') : control;
+  return el('div', { class: `${width ? `${width} wide ` : ''}field` },
+    el('label', { for: target.id, text: labelText }), control, hint ? el('div', { class: 'sl-note', text: hint }) : null);
+}
+
+function numberInput(id, value, min, max) {
+  return el('input', { type: 'number', id, value: String(value), min: String(min), max: String(max), step: '1' });
+}
+
+const section = (title, hint, ...content) => el('div', { class: 'sl-settings-section' },
+  el('h4', { class: 'ui header', text: title }), hint ? el('div', { class: 'sl-note', text: hint }) : null, ...content);
+
+/** Asks before something that can't be undone or changes what callers get; resolves true on OK. */
+function confirmDialog(title, text, okText) {
+  return new Promise((resolve) => {
+    $id('sl-confirm-title').textContent = title;
+    $id('sl-confirm-text').textContent = text;
+    $id('sl-confirm-ok').textContent = okText;
+    let answer = false;
+    $('#sl-confirm-modal').modal({
+      closable: true,
+      onHidden: () => resolve(answer),
+    }).modal('show');
+    $id('sl-confirm-ok').onclick = () => { answer = true; $('#sl-confirm-modal').modal('hide'); };
+    $id('sl-confirm-cancel').onclick = () => $('#sl-confirm-modal').modal('hide');
+  });
+}
+
+/* ------------------------------------------------------------------ prompt previews */
+
+/**
+ * Plays prompts, one at a time. The file comes from the core's
+ * sound-files:playback endpoint with the admin's token, as the core's own
+ * Sound files page does: it serves only the PBX's sound folders, and only to
+ * a signed-in admin.
+ */
+const preview = { audio: null, url: null, button: null, request: 0 };
+
+function setPlaying(button, playing) {
+  const icon = button.querySelector('i');
+  if (icon) icon.className = `${playing ? 'stop' : 'play'} icon`;
+  const text = playing ? t('sl_StopPreview', 'Stop') : t('sl_Listen', 'Listen');
+  button.title = text;
+  button.setAttribute('aria-label', text);
+  button.classList.toggle('sl-playing', playing);
+}
+
+function stopPreview() {
+  preview.request += 1;
+  if (preview.audio) preview.audio.pause();
+  if (preview.url) URL.revokeObjectURL(preview.url);
+  if (preview.button) setPlaying(preview.button, false);
+  Object.assign(preview, { audio: null, url: null, button: null });
+}
+
+async function fetchAudio(path, retry = true) {
+  const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+  const tokens = typeof TokenManager === 'undefined' ? null : TokenManager;
+  if (tokens && tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`;
+  const response = await fetch(`${window.location.origin}/pbxcore/api/v3/sound-files:playback?view=${encodeURIComponent(path)}`, { headers });
+  // An expired token: refresh it the way the core does, and try once more.
+  if (response.status === 401 && retry && tokens && tokens.silentRefresh) {
+    await tokens.silentRefresh();
+    return fetchAudio(path, false);
+  }
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.blob();
+}
+
+/** Plays `path` and shows it on `button`; pressing the playing button again stops it. */
+function togglePreview(path, button) {
+  const again = preview.button === button;
+  stopPreview();
+  if (again) return;
+  if (!path) {
+    showError(t('sl_PreviewNothing', 'Choose a prompt to listen to it.'));
+    return;
+  }
+  clearError();
+  const request = preview.request;
+  preview.button = button;
+  setPlaying(button, true);
+  fetchAudio(path).then((blob) => {
+    if (request !== preview.request) return null;
+    preview.url = URL.createObjectURL(blob);
+    preview.audio = new Audio(preview.url);
+    preview.audio.addEventListener('ended', () => { if (request === preview.request) stopPreview(); });
+    return preview.audio.play();
+  }).catch(() => {
+    if (request !== preview.request) return;
+    stopPreview();
+    showError(t('sl_PreviewFailed', 'This prompt can\'t be played. Its file may be missing, or still being converted after the module was enabled.'));
+  });
+}
+
+/** Built-in prompts by key, for their names in the menus. */
+const BUILT_IN_NAMES = {
+  welcome: ['sl_BuiltIn_welcome', 'Built-In: Thank You for Calling'],
+  'enter-id': ['sl_BuiltIn_enter-id', 'Built-In: Enter Your Reference Number'],
+  'enter-pin': ['sl_BuiltIn_enter-pin', 'Built-In: Enter Your PIN'],
+  invalid: ['sl_BuiltIn_invalid', 'Built-In: Not a Valid Number'],
+  'not-found': ['sl_BuiltIn_not-found', 'Built-In: We Could Not Find That Number'],
+  repeat: ['sl_BuiltIn_repeat', 'Built-In: 1 to Hear Again, 0 for Someone'],
+  goodbye: ['sl_BuiltIn_goodbye', 'Built-In: Goodbye'],
+  transfer: ['sl_BuiltIn_transfer', 'Built-In: Putting You Through'],
+  fault: ['sl_BuiltIn_fault', 'Built-In: We Can\'t Check Right Now'],
+};
+
+/** A prompt ID's file to play: a built-in prompt in the line's language, or a PBX sound file. */
+function promptFile(id) {
+  const n = Number(id);
+  if (!id || Number.isNaN(n)) return null;
+  if (n < 0) {
+    const builtIn = state.options.builtInPrompts.find((p) => p.id === n);
+    return builtIn && builtIn.available ? builtIn.preview[state.options.language] || null : null;
+  }
+  const file = state.options.soundFiles.find((f) => f.id === n);
+  return file && file.path ? file.path : null;
+}
+
+/** The prompt menu's choices: built-in prompts (only those with a recording), then the PBX's sound files. */
+function promptOptions(withNone, builtInKeys) {
+  const builtIn = state.options.builtInPrompts.filter((p) => builtInKeys.includes(p.key) && p.available)
+    .map((p) => [p.id, t(BUILT_IN_NAMES[p.key][0], BUILT_IN_NAMES[p.key][1])]);
+  const files = state.options.soundFiles.map((f) => [f.id, f.name]);
+  return [
+    ...(withNone ? [['0', t('sl_NoPrompt', 'None')]] : []),
+    ...(builtIn.length ? [{ group: t('sl_BuiltInPrompts', 'Built-In Prompts'), options: builtIn }] : []),
+    ...(files.length ? [{ group: t('sl_SoundFiles', 'Sound Files'), options: files }] : []),
+  ];
+}
+
+/** A prompt menu with a Listen button beside it. initPromptMenus() turns the select into a searchable menu. */
+function promptControl(id, value, withNone, builtInKeys) {
+  const menu = select(id, promptOptions(withNone, builtInKeys), value, { class: 'ui search dropdown sl-prompt-select' });
+  const listen = el('button', { class: 'ui basic icon button sl-listen', type: 'button',
+    onclick: () => togglePreview(promptFile(menu.value), listen) }, el('i', { class: 'play icon' }));
+  setPlaying(listen, false);
+  return el('div', { class: 'sl-prompt-control' }, menu, listen);
+}
+
+/**
+ * Turns prompt selects into searchable dropdowns and adds a play button to
+ * every prompt in their lists, so a prompt can be heard before it is chosen.
+ * The select stays underneath, so its value and change events work as before.
+ */
+function initPromptMenus(root) {
+  root.querySelectorAll('select.sl-prompt-select:not(.sl-ready)').forEach((menu) => {
+    menu.classList.add('sl-ready');
+    $(menu).dropdown({ fullTextSearch: true, placeholder: false, match: 'text' });
+    const dropdown = menu.closest('.ui.dropdown');
+    if (!dropdown) return;
+    dropdown.querySelectorAll('.menu .item').forEach((item) => {
+      const value = item.dataset.value;
+      if (!value || value === '0') return;
+      const play = el('span', { class: 'sl-item-play', role: 'button', tabindex: '-1' }, el('i', { class: 'play icon' }));
+      setPlaying(play, false);
+      // Listening must not choose the item or close the list.
+      ['mousedown', 'mouseup', 'touchstart'].forEach((type) => play.addEventListener(type, (e) => e.stopPropagation()));
+      play.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePreview(promptFile(value), play);
+      });
+      item.append(play);
+    });
+  });
+}
+
+/** The destination menu's choices, by the PBX's own names. */
+function destinationOptions(emptyText) {
+  return [['', emptyText], ...state.options.destinations.map((d) => [d.value, d.name])];
+}
+
+/* ------------------------------------------------------------------ call flow */
+
+/** The fixed prompts, in the order a caller hears them, with the built-in prompt each one usually uses. */
+const PROMPTS = [
+  ['welcome_prompt_id', ['welcome'], true, ['sl_PromptWelcomeHint', 'Played once, as the call is answered. Callers can start typing during it.']],
+  ['enter_id_prompt_id', ['enter-id'], false, ['sl_PromptEnterIdHint', 'Asks for the ID and says that 0 reaches someone.']],
+  ['invalid_prompt_id', ['invalid'], false, ['sl_PromptInvalidHint', 'After an entry that is too short, too long or empty.']],
+  ['not_found_prompt_id', ['not-found'], false, ['sl_PromptNotFoundHint', 'After an ID that isn\'t found or has expired.']],
+  ['repeat_prompt_id', ['repeat'], false, ['sl_PromptRepeatHint', 'After a status: 1 to hear it again, 0 for someone.']],
+  ['goodbye_prompt_id', ['goodbye'], false, null],
+  ['transfer_prompt_id', ['transfer'], false, ['sl_PromptTransferHint', 'Before a caller is put through to a person.']],
+  ['fault_prompt_id', ['fault'], false, ['sl_PromptFaultHint', 'When a lookup can\'t be done; the caller is then put through.']],
+];
+
+const NUMBER_FIELDS = [
+  ['id_min_length', 2, 20, null],
+  ['id_max_length', 2, 20, null],
+  ['digit_timeout', 1, 30, ['sl_DigitTimeoutHint', 'Seconds to wait for the first key and between keys. Callers end the ID with #, or wait this long.']],
+  ['max_tries', 1, 9, ['sl_MaxTriesHint', 'Wrong or empty entries a caller gets before they are put through.']],
+];
+
+const USER_KINDS = {
+  route: ['sl_UsedByRoute', 'Incoming route "{name}"'],
+  ivr: ['sl_UsedByIvr', 'IVR menu "{name}"'],
+  offwork: ['sl_UsedByOffWork', 'Off-work time rule "{name}"'],
+};
+
+function lineState(data) {
+  const s = data.settings;
+  const number = s.internal_number;
+  const on = data.answering;
+  const switchedOn = s.active === '1';
+  const title = on
+    ? sub(t('sl_StateOn', 'Answering on {number}'), { number })
+    : t('sl_StateOff', 'Not answering');
+  const lines = [];
+  if (!on) {
+    lines.push(el('div', { text: switchedOn
+      ? t('sl_StateOffProblems', 'The line is switched on, but can\'t answer until this is fixed:')
+      : t('sl_StateOffSwitched', 'The line is switched off. Calls to it aren\'t answered; an incoming route moves on to its next rule or default action.') }));
+    if (data.problems.length) lines.push(el('ul', {}, data.problems.map((p) => el('li', { text: problemText(p) }))));
+  }
+  const toggle = el('button', {
+    class: `ui ${switchedOn ? 'basic' : 'positive'} button`, type: 'button', id: 'sl-toggle',
+    disabled: !switchedOn && data.problems.length > 0,
+    onclick: () => toggleLine(!switchedOn),
+  }, switchedOn ? t('sl_SwitchOff', 'Switch Off') : t('sl_SwitchOn', 'Switch On'));
+  return el('div', { class: `sl-state ${on ? 'sl-on' : 'sl-off'}` },
+    el('div', {}, el('div', { class: 'sl-state-title', text: title }), lines), toggle);
+}
+
+function usedBy(data) {
+  const number = data.settings.internal_number;
+  if (!number) return null;
+  if (!data.usedBy.length) {
+    return el('div', { class: 'sl-note', text: sub(t('sl_UsedByNone', 'Nothing sends callers to {number} yet. Choose it as the destination of an incoming route or an IVR menu option ("Module: Status Lookup ({number})"). Staff can also dial it, or transfer callers to it.'), { number }) });
+  }
+  return el('div', {},
+    el('div', { class: 'sl-note', text: t('sl_UsedByIntro', 'Callers reach the line from:') }),
+    el('ul', { class: 'sl-users' }, data.usedBy.map((u) => el('li', {
+      text: sub(t(USER_KINDS[u.kind][0], USER_KINDS[u.kind][1]), { name: u.name || '—' }) + (u.detail ? ` (${u.detail})` : ''),
+    }))));
+}
+
+function renderCallFlow(data) {
+  state.callFlow = data;
+  state.dirty = false;
+  const s = data.settings;
+  const box = $id('sl-callflow');
+
+  const numberForm = el('div', { class: 'ui form' }, el('div', { class: 'sl-inline' },
+    field(t('sl_Number', 'Internal Number'), el('input', { type: 'text', id: 'sl-number', value: s.internal_number, inputmode: 'numeric', maxlength: '8', size: '10' })),
+    el('button', { class: 'ui button', type: 'button', onclick: changeNumber }, t('sl_ChangeNumber', 'Change Number'))));
+
+  const form = el('form', { class: 'ui form', id: 'sl-callflow-form', onsubmit: (e) => { e.preventDefault(); saveCallFlow(); } },
+    section(t('sl_SectionPrompts', 'What Callers Hear'), t('sl_SectionPromptsHint', 'The built-in prompts work for any business. To use your own wording, upload a recording on the PBX\'s Sound files page and choose it here.'),
+      PROMPTS.map(([f, keys, withNone, hint]) => field(fieldName(f), promptControl(`sl-${f}`, s[f], withNone, keys), hint ? t(hint[0], hint[1]) : null))),
+    section(t('sl_SectionInput', 'How Callers Type'), null,
+      el('div', { class: 'two fields' }, NUMBER_FIELDS.slice(0, 2).map(([f, min, max]) => field(fieldName(f), numberInput(`sl-${f}`, s[f], min, max)))),
+      el('div', { class: 'sl-note', text: t('sl_IdLengthHint', 'IDs are 2 to 20 digits. Leading zeros count: 00451 and 451 are different IDs.') }),
+      el('div', { class: 'two fields' }, NUMBER_FIELDS.slice(2).map(([f, min, max, hint]) => field(fieldName(f), numberInput(`sl-${f}`, s[f], min, max), t(hint[0], hint[1]))))),
+    section(t('sl_SectionDestinations', 'Where Callers Go'), t('sl_SectionDestinationsHint', 'Every way out of the lookup leads to a person. A status can also send callers somewhere of its own.'),
+      field(fieldName('operator_number'), select('sl-operator_number', destinationOptions(t('sl_ChooseDestination', 'Choose…')), s.operator_number, { class: 'ui search dropdown' }),
+        t('sl_OperatorHint', 'Where 0 sends callers, at any prompt that listens for keys.')),
+      field(fieldName('too_many_tries_number'), select('sl-too_many_tries_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator')), s.too_many_tries_number, { class: 'ui search dropdown' })),
+      field(fieldName('fault_number'), select('sl-fault_number', destinationOptions(t('sl_SameAsOperator', 'Same as the Operator')), s.fault_number, { class: 'ui search dropdown' }),
+        t('sl_FaultHint', 'When a status can\'t be played or its destination is gone. Callers first hear the apology.'))),
+    section(t('sl_SectionGuessing', 'Guessing Protection'), t('sl_SectionGuessingHint', 'IDs typed that aren\'t found count as misses. A caller number with too many misses in the last hour is put straight through to the operator; so is everyone, when all callers together miss too often (callers who hide their number, or change it with every call). 0 turns a limit off.'),
+      el('div', { class: 'two fields' },
+        field(fieldName('miss_limit_caller'), numberInput('sl-miss_limit_caller', s.miss_limit_caller, 0, 1000)),
+        field(fieldName('miss_limit_total'), numberInput('sl-miss_limit_total', s.miss_limit_total, 0, 100000)))),
+    el('div', { class: 'sl-settings-save' },
+      el('button', { class: 'ui primary button', type: 'submit', id: 'sl-save' }, t('sl_SaveChanges', 'Save Changes')),
+      el('span', { class: 'sl-actions-hint', id: 'sl-save-hint' })));
+
+  fill(box,
+    section(t('sl_SectionLine', 'Lookup Line'), null, lineState(data)),
+    section(t('sl_SectionNumber', 'Where Callers Come From'), null, numberForm, usedBy(data)),
+    form);
+  initPromptMenus(box);
+  $(box).find('select.ui.dropdown:not(.sl-prompt-select)').dropdown({ fullTextSearch: true, placeholder: false });
+  form.addEventListener('input', markDirty);
+  form.addEventListener('change', markDirty);
+}
+
+function markDirty() {
+  state.dirty = true;
+  $id('sl-save-hint').textContent = t('sl_UnsavedChanges', 'Unsaved changes');
+}
+
+function readCallFlow() {
+  const values = {};
+  PROMPTS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
+  NUMBER_FIELDS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
+  ['operator_number', 'too_many_tries_number', 'fault_number', 'miss_limit_caller', 'miss_limit_total'].forEach((f) => { values[f] = $id(`sl-${f}`).value; });
+  return values;
+}
+
+function saveCallFlow() {
+  const button = $id('sl-save');
+  button.classList.add('loading');
+  post('saveCallFlow', { settings: JSON.stringify(readCallFlow()) })
+    .then((data) => {
+      renderCallFlow(data);
+      $id('sl-save-hint').textContent = t('sl_Saved', 'Saved.');
+    })
+    .fail((xhr) => showError(saveFailed(xhr)))
+    .always(() => button.classList.remove('loading'));
+}
+
+function toggleLine(on) {
+  const go = () => post('saveCallFlow', { settings: JSON.stringify({ active: on }) })
+    .then(renderCallFlow)
+    .fail((xhr) => showError(saveFailed(xhr)));
+  if (state.dirty) {
+    showError(t('sl_SaveFirst', 'Save or undo your changes first.'));
+    return;
+  }
+  if (on) {
+    go();
+    return;
+  }
+  confirmDialog(t('sl_SwitchOffTitle', 'Switch Off the Lookup Line?'),
+    t('sl_SwitchOffText', 'Callers to the line won\'t be answered; incoming routes that send callers here move on to their next rule or default action.'),
+    t('sl_SwitchOff', 'Switch Off')).then((ok) => { if (ok) go(); });
+}
+
+function changeNumber() {
+  const number = $id('sl-number').value.trim();
+  if (number === state.callFlow.settings.internal_number) return;
+  confirmDialog(t('sl_ChangeNumberTitle', 'Change the Number?'),
+    sub(t('sl_ChangeNumberText', 'The line will answer on {number} instead of {old}. Staff who dial the old number will no longer reach it.'), { number, old: state.callFlow.settings.internal_number || '—' }),
+    t('sl_ChangeNumber', 'Change Number')).then((ok) => {
+    if (!ok) return;
+    post('changeNumber', { number })
+      .then((data) => {
+        renderCallFlow(data);
+        // The destination list leaves out the line's own number.
+        get('options').then((options) => { state.options = options; });
+      })
+      .fail((xhr) => showError(saveFailed(xhr)));
+  });
+}
+
+function loadCallFlow() {
+  fill($id('sl-callflow'), el('div', { class: 'ui active centered inline loader' }));
+  get('callFlow').then(renderCallFlow);
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+/** Fades the tab bar's right edge while more tabs are scrolled out of view. */
+function updateTabsOverflow() {
+  const tabs = $id('sl-tabs');
+  const overflow = tabs.scrollWidth > tabs.clientWidth + 1;
+  tabs.classList.toggle('sl-overflow', overflow);
+  tabs.classList.toggle('sl-at-end', overflow && tabs.scrollLeft + tabs.clientWidth >= tabs.scrollWidth - 1);
+}
+
+const TABS = { callflow: loadCallFlow };
+
+function selectTab(tab) {
+  if (state.tab === 'callflow' && tab !== 'callflow' && state.dirty) {
+    confirmDialog(t('sl_LeaveTitle', 'Leave Without Saving?'), t('sl_LeaveText', 'Your changes to the call flow will be lost.'), t('sl_Leave', 'Leave'))
+      .then((ok) => { if (ok) { state.dirty = false; selectTab(tab); } });
+    return;
+  }
+  stopPreview();
+  state.tab = tab;
+  document.querySelectorAll('#status-lookup [data-tab]').forEach((n) => n.classList.toggle('active', n.dataset.tab === tab));
+  clearError();
+  TABS[tab]();
+}
+
+function init() {
+  document.querySelectorAll('#sl-tabs .item').forEach((a) => a.addEventListener('click', () => selectTab(a.dataset.tab)));
+  $id('sl-tabs').addEventListener('scroll', updateTabsOverflow);
+  window.addEventListener('resize', updateTabsOverflow);
+  window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  updateTabsOverflow();
+  get('options').then((options) => {
+    state.options = options;
+    const asked = new URLSearchParams(window.location.search).get('tab');
+    selectTab(TABS[asked] ? asked : 'callflow');
+  });
+}
+
+$(document).ready(init);

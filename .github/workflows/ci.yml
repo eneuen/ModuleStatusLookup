@@ -1,5 +1,6 @@
-# Checks every push and pull request: unit tests, lint, banned functions and
-# static analysis against the MikoPBX core.
+# Checks every push and pull request: unit tests, lint, banned functions,
+# static analysis against the MikoPBX core, the npm audit, and that the
+# committed browser bundle matches its source.
 name: CI
 
 on:
@@ -38,3 +39,16 @@ jobs:
       # The core's PHP extensions (Phalcon and others) are only needed to run it, not to analyse it.
       - run: composer install -d tools/phpstan --no-interaction --no-progress --ignore-platform-req='ext-*'
       - run: composer analyse
+
+  assets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm audit --audit-level=low
+      - run: npm run build
+      - name: Committed bundle matches its source
+        run: git diff --exit-code -- public/assets/js

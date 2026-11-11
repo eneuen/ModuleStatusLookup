@@ -87,8 +87,10 @@ final class DialplanBuilder
      * @param string $language The PBX's language, such as en-en.
      * @param string $soundsDir The PBX's Asterisk sounds folder (for built-in prompts in other languages).
      * @param callable(int): ?string $promptPath A PBX sound file ID => path for Playback, or null.
+     * @param (callable(int, string): bool)|null $builtInAvailable Whether a built-in prompt's recording ships for a
+     *        language; null when all do.
      */
-    public function __construct(array $settings, string $language, string $soundsDir, callable $promptPath)
+    public function __construct(array $settings, string $language, string $soundsDir, callable $promptPath, ?callable $builtInAvailable = null)
     {
         $number = (string)$settings['internal_number'];
         $this->number = IvrNumber::isValid($number) ? $number : '';
@@ -96,7 +98,9 @@ final class DialplanBuilder
         $this->language = preg_match(self::LANGUAGE_PATTERN, $language) === 1 ? $language : BuiltInPrompts::LANGUAGES[0];
 
         foreach (self::PROMPTS as $prompt => $field) {
-            $this->prompts[$prompt] = self::resolve((int)$settings[$field], $this->language, $soundsDir, $promptPath);
+            $id = (int)$settings[$field];
+            $missing = $builtInAvailable !== null && BuiltInPrompts::isBuiltIn($id) && !$builtInAvailable($id, $this->language);
+            $this->prompts[$prompt] = $missing ? null : self::resolve($id, $this->language, $soundsDir, $promptPath);
         }
         $this->operator = self::destination((string)$settings['operator_number']);
         $this->tooMany = self::destination((string)$settings['too_many_tries_number']) ?: $this->operator;

@@ -1,0 +1,113 @@
+/*
+ * Status Lookup page (GPL-3.0-or-later).
+ *
+ * Built on the admin cabinet's Semantic UI, with the same shared values as
+ * the Call Insights and Call Feedback modules, so every part of the page uses
+ * the same colours, spacing and type sizes. Text colours keep at least 4.5:1
+ * contrast on white.
+ */
+.sl-page, #sl-confirm-modal {
+    --sl-primary: #2185d0;      /* blue 5 */
+    --sl-text: #1f2933;         /* grey 9 */
+    --sl-muted: #616e7c;        /* grey 5, 5.2:1 */
+    --sl-faint: #9aa5b1;        /* grey 3, decoration only */
+    --sl-border: #e4e7eb;       /* grey 1 */
+    --sl-border-strong: #cbd2d9;/* grey 2 */
+    --sl-surface: #f5f7fa;      /* grey 0 */
+    --sl-good: #247548;         /* green 6, 5.7:1 */
+    --sl-bad: #ab2f2f;          /* red 6, 6.6:1 */
+    --sl-warn: #90560c;         /* amber 7, 6.1:1 */
+    --sl-space-1: .25rem;
+    --sl-space-2: .5rem;
+    --sl-space-3: .75rem;
+    --sl-space-4: 1rem;
+    --sl-space-6: 1.5rem;
+    --sl-space-8: 2rem;
+}
+
+/* Not scoped: Semantic UI moves modals outside .sl-page. */
+.sl-hidden { display: none !important; }
+
+/* ---------------------------------------------------------------- tabs */
+
+/* As in Call Insights: scrolls sideways when the tabs don't fit, with a fade on the right. */
+.sl-page #sl-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+/* !important: Semantic sets box-shadow: none !important on tabular menus. */
+.sl-page #sl-tabs.ui.tabular.menu { border-bottom: none; box-shadow: inset 0 -1px 0 #d4d4d5 !important; }
+.sl-page #sl-tabs.ui.tabular.menu .active.item { margin-bottom: 0; position: relative; z-index: 1; }
+.sl-page #sl-tabs::-webkit-scrollbar { display: none; }
+.sl-page #sl-tabs > .item, .sl-page #sl-tabs .right.menu > .item { flex-shrink: 0; white-space: nowrap; }
+.sl-page #sl-tabs.sl-overflow {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 3rem), transparent);
+}
+.sl-page #sl-tabs.sl-overflow.sl-at-end { -webkit-mask-image: none; mask-image: none; }
+.sl-page #sl-tabs .right.menu .item .icon { color: var(--sl-muted); }
+.sl-page #sl-tabs .item .ui.label { margin-left: var(--sl-space-2); }
+
+/* ---------------------------------------------------------------- sections */
+
+.sl-page .tab.segment { padding: var(--sl-space-6); }
+.sl-page .sl-section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--sl-space-3);
+    margin: var(--sl-space-8) 0 var(--sl-space-3);
+}
+.sl-page .tab.segment > .sl-section-head:first-child,
+.sl-page .tab.segment > div:first-child > .sl-section-head:first-child { margin-top: 0; }
+.sl-page .sl-section-head > .ui.header { margin: 0; font-size: 1.05rem; color: var(--sl-text); }
+.sl-page .sl-section-actions { display: flex; align-items: center; gap: var(--sl-space-2); flex-shrink: 0; flex-wrap: wrap; }
+.sl-page .sl-section-actions .ui.button { margin: 0; }
+.sl-page .sl-note { color: var(--sl-muted); font-size: .9em; margin-top: var(--sl-space-3); }
+.sl-page .sl-muted { color: var(--sl-muted); }
+.sl-page .sl-nowrap { white-space: nowrap; }
+
+/* ---------------------------------------------------------------- settings */
+
+.sl-page .sl-settings-section + .sl-settings-section { margin-top: var(--sl-space-8); }
+.sl-page .sl-settings-section > .ui.header { font-size: 1.05rem; color: var(--sl-text); margin: 0 0 var(--sl-space-2); }
+.sl-page .sl-settings-section > .sl-note:first-of-type { margin: 0 0 var(--sl-space-3); }
+.sl-page .sl-settings-save {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--sl-space-2);
+    margin: var(--sl-space-8) calc(-1 * var(--sl-space-6)) calc(-1 * var(--sl-space-6));
+    padding: var(--sl-space-3) var(--sl-space-6); background: var(--sl-surface); border-top: 1px solid var(--sl-border);
+}
+.sl-page .sl-settings-save .ui.button { margin: 0; }
+.sl-page .sl-settings-save .sl-actions-hint { color: var(--sl-muted); font-size: .9em; }
+.sl-page .sl-narrow { max-width: 44rem; }
+/* The call-flow form's sections keep a readable width; its save bar spans the panel. */
+.sl-page #sl-callflow-form { margin-top: var(--sl-space-8); }
+.sl-page #sl-callflow-form > .sl-settings-section { max-width: 44rem; }
+.sl-page .sl-inline { display: flex; align-items: flex-end; gap: var(--sl-space-2); flex-wrap: wrap; }
+.sl-page .sl-inline .field { margin: 0 !important; }
+.sl-page .sl-inline .ui.button { margin: 0; }
+
+/* The line's state: a coloured bar on the left says on or off at a glance. */
+.sl-page .sl-state {
+    border: 1px solid var(--sl-border); border-left: 4px solid var(--sl-border-strong); border-radius: 6px;
+    padding: var(--sl-space-4); display: flex; gap: var(--sl-space-4); align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+}
+.sl-page .sl-state.sl-on { border-left-color: var(--sl-good); }
+.sl-page .sl-state.sl-off { border-left-color: var(--sl-warn); }
+.sl-page .sl-state-title { font-weight: 700; font-size: 1.05rem; color: var(--sl-text); }
+.sl-page .sl-state.sl-on .sl-state-title { color: var(--sl-good); }
+.sl-page .sl-state.sl-off .sl-state-title { color: var(--sl-warn); }
+.sl-page .sl-state ul { margin: var(--sl-space-2) 0 0; padding-left: 1.2em; }
+.sl-page .sl-state .ui.button { margin: 0; }
+.sl-page .sl-users { margin: var(--sl-space-2) 0 0; padding-left: 1.2em; }
+
+/* Prompt menus: a searchable dropdown with a Listen button beside it, and a play button on each prompt in the list. */
+.sl-page .sl-prompt-control { display: flex; align-items: stretch; gap: var(--sl-space-2); }
+.sl-page .sl-prompt-control > .ui.dropdown { flex: 1 1 auto; min-width: 0; }
+.sl-page .sl-prompt-control > .sl-listen.ui.button { margin: 0; flex: 0 0 auto; }
+.sl-page .sl-listen.sl-playing.ui.button { color: var(--sl-primary) !important; box-shadow: 0 0 0 1px var(--sl-primary) inset !important; }
+.sl-page .sl-prompt-control .menu > .item { display: flex !important; align-items: center; gap: var(--sl-space-2); }
+.sl-page .sl-item-play { margin-left: auto; padding: var(--sl-space-1) var(--sl-space-2); border-radius: 4px; color: var(--sl-muted); cursor: pointer; line-height: 1; }
+.sl-page .sl-item-play:hover, .sl-page .sl-item-play.sl-playing { color: var(--sl-primary); background: var(--sl-surface); }
+.sl-page .sl-item-play i.icon { margin: 0; }
+
+#sl-confirm-modal .content p { font-size: 1.05rem; line-height: 1.5; color: #1f2933; }
+
+@media (max-width: 767px) {
+    .sl-page .sl-section-head { flex-wrap: wrap; }
+}
+.sl-page .ui.form .sl-note + .fields, .sl-page .ui.form .sl-note + .field { margin-top: var(--sl-space-4); }

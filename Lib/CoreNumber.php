@@ -95,6 +95,14 @@ final class CoreNumber
         return $extension !== null && self::isOwn($extension->type, $extension->callerid, $number);
     }
 
+    /** Whether another extension or module already has this number. */
+    public static function isTaken(string $number): bool
+    {
+        $extension = Extensions::findFirstByNumber($number);
+
+        return $extension !== null && !self::isOwn($extension->type, $extension->callerid, $number);
+    }
+
     private static function isOwn(?string $type, ?string $callerId, string $number): bool
     {
         return $type === Extensions::TYPE_MODULES && $callerId === IvrNumber::callerId(self::LABEL, $number);

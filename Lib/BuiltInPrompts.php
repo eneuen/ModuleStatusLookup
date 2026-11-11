@@ -54,6 +54,57 @@ final class BuiltInPrompts
         return is_string($key) ? $key : null;
     }
 
+    /** The folder under the module directory that the core installs sounds from. */
+    public const string SOUNDS_DIR = 'Sounds';
+
+    /**
+     * The language a built-in prompt plays in: the channel's own when the
+     * module ships it, else English.
+     */
+    public static function languageFor(string $language): string
+    {
+        return in_array($language, self::LANGUAGES, true) ? $language : self::LANGUAGES[0];
+    }
+
+    /**
+     * Whether the module ships this prompt's recording for a channel
+     * language (or the English one it falls back to).
+     *
+     * @param string $moduleDir The module's folder.
+     */
+    public static function available(string $moduleDir, int $id, string $language): bool
+    {
+        $key = self::key($id);
+
+        return $key !== null
+            && is_file(rtrim($moduleDir, '/') . '/' . self::SOUNDS_DIR . '/' . self::languageFor($language) . "/$key.wav");
+    }
+
+    /**
+     * The catalogue for the page, in display order, with the file it can
+     * play for a preview in each language: the core installs the prompts
+     * into its sounds folder and converts them; the browser-friendly .webm
+     * copy is preferred, else the shipped .wav.
+     *
+     * @param string|null $soundsDir The PBX's Asterisk sounds folder, or null for no previews.
+     *
+     * @return list<array{id: int, key: string, preview: array<string, string>}>
+     */
+    public static function catalogue(?string $soundsDir = null): array
+    {
+        $list = [];
+        foreach (self::IDS as $key => $id) {
+            $preview = [];
+            foreach ($soundsDir === null ? [] : self::LANGUAGES as $language) {
+                $base = rtrim($soundsDir, '/') . "/$language/" . self::NAME_PREFIX . $key;
+                $preview[$language] = is_file("$base.webm") ? "$base.webm" : "$base.wav";
+            }
+            $list[] = ['id' => $id, 'key' => $key, 'preview' => $preview];
+        }
+
+        return $list;
+    }
+
     /**
      * What to Playback for a built-in prompt, or null for any other ID.
      *

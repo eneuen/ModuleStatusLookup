@@ -109,6 +109,18 @@ class StatusLookupConf extends ConfigClass
         return $path === '' ? null : $path;
     }
 
+    /** Whether the module ships a built-in prompt's recording for a language (or English). */
+    public static function builtInAvailable(int $id, string $language): bool
+    {
+        return BuiltInPrompts::available(PbxExtensionUtils::getModuleDir(self::MODULE_ID), $id, $language);
+    }
+
+    /** The PBX's language as Asterisk names it, such as en-en. */
+    public static function language(): string
+    {
+        return strtolower(str_replace('_', '-', (string)PbxSettings::getValueByKey(PbxSettings::PBX_LANGUAGE)));
+    }
+
     private function builder(): ?DialplanBuilder
     {
         try {
@@ -121,9 +133,10 @@ class StatusLookupConf extends ConfigClass
 
             return new DialplanBuilder(
                 $settings,
-                (string)PbxSettings::getValueByKey(PbxSettings::PBX_LANGUAGE),
+                self::language(),
                 Directories::getDir(Directories::AST_SOUNDS_DIR),
                 [self::class, 'promptPath'],
+                [self::class, 'builtInAvailable'],
             );
         } catch (Throwable $e) {
             SystemMessages::sysLogMsg(static::class, 'Lookup dialplan not generated: ' . $e->getMessage(), LOG_ERR);
