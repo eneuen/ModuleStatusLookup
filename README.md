@@ -2,19 +2,99 @@
 
 **Module ID:** `ModuleStatusLookup`
 
-A MikoPBX extension module that answers "Is it ready yet?" calls without a person. The caller types their ticket, order or prescription number on the keypad and hears its status from a recording. Statuses live in the module's own database on the PBX: loaded from a CSV file, edited by hand, or pushed by shop software over the REST API. No cloud service, CRM or internet connection is involved, and pressing 0 always reaches a person.
+A MikoPBX extension module that answers "Is it ready yet?" calls without a person. The caller types their ticket, order or prescription number on the keypad and hears its status from a recording: "Your device is ready for pickup." Statuses live in the module's own database on the PBX: loaded from a CSV file, edited by hand, or pushed by shop software over the REST API. No cloud service, CRM or internet connection is involved, and pressing 0 always reaches a person.
 
-> **Status: in development.** Not ready for use yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md).
+It suits any business whose customers call to ask where something stands: device and IT repair, auto workshops, pharmacies, shops and online stores.
 
-## Planned features
+> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md).
 
-- **A lookup line** with its own internal number (2300 by default). Choose it as the destination of an incoming route or an IVR menu option, like a queue; staff can also dial it or transfer callers to it.
-- **One short exchange:** the caller enters an ID and hears its status, optionally followed by the ID read back or a date. Three tries at most; 0 reaches a person at any prompt, and every dead end (not found, too many tries, a status that needs a conversation) has its own destination.
-- **Templates** for IT and device repair, auto workshops, pharmacies, and retail and e-commerce, each with its statuses, ID length and privacy defaults, plus a blank one.
-- **Records** from a CSV import (with a dry-run preview), single-record editing, or the REST API. Records can expire, so stale statuses are never read out.
-- **Privacy:** only the status is spoken, never names or notes; optional PIN or caller-ID check per status; a limit on missed lookups per caller and for the whole PBX against guessing.
-- **Activity:** how many calls the line answered, how many reached a person, and where callers got stuck.
-- **Built-in prompts** in English and Russian, so a new install speaks before anyone records anything.
+![The Records tab: each ID with its status, date, last day, note and last change, with search, filters and CSV export](docs/screenshots/records.png)
+
+## Screenshots
+
+The screenshots show a test PBX with simulated calls; the IDs, notes and numbers are made up.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/statuses.png"><img src="docs/screenshots/statuses.png" alt="The Statuses tab: each status with its recorded sentence, what is said after it and what happens next"></a>
+      <br><b>Statuses.</b> The statuses records can have, each with its recorded sentence and what happens after it.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/import.png"><img src="docs/screenshots/import.png" alt="The Import tab: a checked file with how many records are new, changed and left out, and the rows left out with their reasons"></a>
+      <br><b>Import.</b> A CSV file is checked first: what is new, what changes, and every row left out, with its reason.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/activity.png"><img src="docs/screenshots/activity.png" alt="The Activity tab: calls, statuses heard, the share that needed no person, calls by day and how calls ended"></a>
+      <br><b>Activity.</b> How many calls the line answered on its own, how calls ended, the busiest hours and the IDs callers couldn't find.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/call-flow.png"><img src="docs/screenshots/call-flow.png" alt="The Call Flow tab: the line's state and test call, what sends callers to it, and its prompts"></a>
+      <br><b>Call Flow.</b> The line's number, what callers hear, how they type, where they go, and privacy settings.
+    </td>
+  </tr>
+</table>
+
+## Requirements
+
+- MikoPBX 2026.6.34 or later.
+
+## Installing
+
+1. Download `ModuleStatusLookup-<version>.zip` and its `.sha256` file from this repository's **Releases** page. Use that zip: the "Source code" downloads GitHub adds to each release are for developers and can't be installed.
+2. Check the download against its checksum, for example with `shasum -a 256 -c ModuleStatusLookup-<version>.zip.sha256` (macOS or Linux).
+3. In the MikoPBX admin cabinet, open **Modules**, upload the zip, then enable the module.
+
+Status Lookup appears in the sidebar for administrators. It takes internal number 2300 (or the first free number up to 2399) for its line. No call changes until the line is switched on and something sends callers to its number.
+
+## Setting it up
+
+1. **Statuses.** Open **Modules → Status Lookup**. The first time, the Statuses tab asks what kind of business this is and adds that business's usual statuses (or start from scratch). Each status needs one recorded sentence: upload the recordings on the PBX's **Sound files** page and choose each one with **Edit**. **Download Wording** lists what to record.
+2. **Records.** Add records on the Records tab, or import a CSV file on the Import tab.
+3. **Call Flow.** Choose the operator (where 0 and every dead end lead), check the prompts and the ID lengths, and **Switch On** the line.
+4. **Test.** **Test Call** rings your extension and puts you through the line as a caller hears it.
+5. **Send callers to it.** Point an incoming route, an IVR menu option or an off-work time rule at **Module: Status Lookup (2300)**, as you would a queue. Staff can also dial the number or transfer callers to it.
+
+## How a call goes
+
+1. The caller hears a welcome and is asked for their number (the ID). They type it and press #; they can start typing during the prompt.
+2. The line looks the ID up and plays its status: one recorded sentence, optionally followed by the ID read back or the record's date ("Thursday, November twelfth").
+3. After the status, the line says goodbye, offers "press 1 to hear it again, 0 to speak to someone", or puts the caller straight through to the status's own destination (for a status that needs a conversation).
+
+Along the way:
+
+- **0 reaches a person** at any prompt that listens for keys.
+- **Three tries:** an ID that isn't found, an expired record or an entry that's too short or too long costs a try; after the last one, the caller goes to the too-many-tries destination.
+- **Never a dead end:** a status that can't be played, a destination that has been deleted, or any fault sends the caller to the fault destination (the operator by default), with an apology.
+- **Only the status is spoken,** never names or notes.
+- **IDs are digits,** kept as text, so leading zeros count: `00451` and `451` are different records.
+- Until the line is switched on, it doesn't answer, so an incoming route moves on to its next rule as for any unanswered destination.
+
+The line behaves like the PBX's own IVR menus: it has its own row in the call history, tells the incoming route the call was answered, and takes transfers from phones. Its part of the call isn't recorded, because callers type IDs and PINs there.
+
+## Using it
+
+**Records** (the first tab): every record, newest change first, with search by ID or note, filters by status, by "not changed in 7, 30 or 90 days" and expired only, and changes to many records at once. **Export CSV** downloads the filtered records in the import format. Each record can have a **date** (spoken if its status says so), a **last day** (after it, callers hear "not found": a stale status is worse than none), a **note** for staff, a **phone number** and a **PIN**.
+
+**Import:** a CSV file in UTF-8 with a header row; `lookup_id` and `status_code` are needed, `note`, `expires`, `date`, `pin` and `phone` optional. **Add and Update** adds new IDs and changes existing ones; **Replace All** also deletes records that aren't in the file (but never one whose row was left out for a mistake). **Check File** shows what would happen first; nothing changes until you press Import. A file of up to 100,000 rows is applied in one go, while calls keep being answered.
+
+**Statuses:** the statuses records can have, in the order staff see them. **Add from Template…** adds a business's statuses you don't have yet.
+
+**Activity:** for any period up to a year: calls, how many heard their status, the share that needed no person, where the others went, calls by day, the busiest hours, the IDs callers typed most that weren't found (each with **Find in Records**), and the call log. Test calls are marked and left out of the numbers.
+
+**Call Flow:** the line's state and test call; its number and what sends callers to it; the prompts (built-in English and Russian ones, or your own sound files); how callers type; where they go; the guessing protection; and privacy.
+
+## Privacy and protection
+
+- **PIN:** a status can ask for the record's PIN (4 to 8 digits) before it is told; the pharmacy template does. PINs are stored only as keyed hashes and can't be shown or exported.
+- **Own phone only:** a status can be told only to a caller calling from the number saved on the record.
+- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. A caller number with 10 misses in an hour, or all callers together with 200, is put straight through to the operator. After 10 wrong PINs for one ID in a day, from any callers, that ID's PIN is no longer asked for.
+- **Call log:** callers' numbers and the IDs they typed are kept as long as the PBX keeps its call history, or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes everything about one ID or one caller number.
+- MikoPBX's own Asterisk log records every key pressed on any call, IDs and PINs included; that is a PBX-wide setting outside the module.
+
+See [SECURITY.md](SECURITY.md) for what the module exposes and how to report a problem.
 
 ## REST API
 
@@ -45,9 +125,19 @@ A refusal answers 400 with an error code in `data.error` and its details in `dat
 
 The PBX's REST layer treats any text value starting with "http" as a web address and removes its spaces and non-Latin letters before the module sees it, so a note starting with "http" is refused rather than stored damaged; put a word before the link.
 
-## Requirements
+## Who can use it
 
-MikoPBX 2026.6.34 or later.
+Administrators only. The page and every action refuse anyone else, and the REST API accepts administrators' logins, API keys given its paths, and scripts on the PBX itself.
+
+## Disabling and uninstalling
+
+Disabling switches the line off and hides its number from the destination lists; calls to the number fail meanwhile, so point routes elsewhere before disabling it for more than a moment. Enabling brings everything back as it was.
+
+Uninstalling with **keep settings** keeps the records, statuses, settings, call log and PIN key for a later reinstall. Without it, all of those are deleted and the number is released in MikoPBX. A number that something still points at (an incoming route, an IVR menu option or an off-work time rule) can't be released and stays registered, so change those first; a later install takes it back, and those routes work again.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the checks, how a call runs and how a release is made.
 
 ## License
 

@@ -974,7 +974,7 @@ function bulkBar() {
       el('button', { class: 'ui basic button', type: 'button', onclick: () => { records.selected.clear(); renderRecords(); } }, t('sl_ClearSelection', 'Clear Selection'))));
 }
 
-function recordRow(r, today) {
+function recordRow(r, today, withDate) {
   const expired = r.expires_on && r.expires_on < today;
   const box = el('input', { type: 'checkbox', checked: records.selected.has(r.id), 'aria-label': sub(t('sl_SelectRecord', 'Select {id}'), { id: r.lookup_id }) });
   box.addEventListener('change', () => { if (box.checked) records.selected.add(r.id); else records.selected.delete(r.id); renderRecords(); });
@@ -984,10 +984,11 @@ function recordRow(r, today) {
       r.has_pin ? el('i', { class: 'lock icon sl-pin-mark', title: t('sl_HasPin', 'Has a PIN'), 'aria-label': t('sl_HasPin', 'Has a PIN') }) : null),
     r.phone ? el('div', { class: 'sl-sub-line', text: r.phone }) : null),
     el('td', {}, statusLabel(r.status_code)),
-    el('td', { class: 'sl-nowrap', text: isoText(r.status_date) }),
+    withDate ? el('td', { class: 'sl-nowrap', text: isoText(r.status_date) }) : null,
     el('td', { class: 'sl-nowrap' }, expired ? el('span', { class: 'sl-warn-text', text: sub(t('sl_ExpiredOn', 'Expired {date}'), { date: isoText(r.expires_on) }) }) : isoText(r.expires_on)),
     el('td', { class: 'sl-note-cell', text: r.note }),
-    el('td', { class: 'sl-nowrap' }, el('div', { text: shortDateTime(r.updated_at) }),
+    // Who changed it may be a long API key name: it wraps, the date doesn't.
+    el('td', { class: 'sl-changed-cell' }, el('div', { class: 'sl-nowrap', text: shortDateTime(r.updated_at) }),
       el('div', { class: 'sl-sub-line', text: [r.updated_by, SOURCES[r.source] ? label(SOURCES[r.source]) : ''].filter(Boolean).join(' · ') })),
     el('td', { class: 'sl-actions-cell' },
       el('button', { class: 'ui basic button', type: 'button', onclick: () => openRecord(r) }, t('sl_Edit', 'Edit')),
@@ -1009,6 +1010,8 @@ function renderRecords() {
     rows.forEach((r) => (allBox.checked ? records.selected.add(r.id) : records.selected.delete(r.id)));
     renderRecords();
   });
+  // Most businesses never use the record date: its column only shows when a record on the page has one.
+  const withDate = rows.some((r) => r.status_date);
   const filtered = records.query.search || records.query.status || records.query.stale !== '0' || records.query.expired;
   const table = rows.length
     ? el('table', { class: 'ui very basic table sl-table' },
@@ -1016,12 +1019,12 @@ function renderRecords() {
         el('th', { class: 'sl-check-cell' }, allBox),
         el('th', { text: t('sl_ColId', 'ID') }),
         el('th', { text: t('sl_ColStatus', 'Status') }),
-        el('th', { text: t('sl_ColDate', 'Date') }),
+        withDate ? el('th', { text: t('sl_ColDate', 'Date') }) : null,
         el('th', { text: t('sl_ColLastDay', 'Last Day') }),
         el('th', { text: t('sl_ColNote', 'Note') }),
         el('th', { text: t('sl_ColChanged', 'Last Change') }),
         el('th', {}))),
-      el('tbody', {}, rows.map((r) => recordRow(r, d.today))))
+      el('tbody', {}, rows.map((r) => recordRow(r, d.today, withDate))))
     : el('div', { class: 'ui message' }, el('p', { text: filtered
       ? t('sl_NoMatches', 'No records match these filters.')
       : t('sl_NoRecords', 'No records yet. Add them one by one, or import a CSV file from your shop software or spreadsheet.') }));
@@ -1476,10 +1479,12 @@ function renderActivity(a) {
   }
   fill(box,
     el('div', { class: 'sl-tiles sl-tiles-4' },
-      tile(t('sl_TileCalls', 'Calls'), count(tot.calls), null, changeLine(tot.calls, prev.calls)),
-      tile(t('sl_TileHeard', 'Heard Their Status'), count(tot.hits), sub(t('sl_OfCalls', '{pct}% of calls'), { pct: pct(tot.hits, tot.calls) }), changeLine(tot.hits, prev.hits)),
-      tile(t('sl_TileDeflected', 'Needed No Person'), rate === null ? null : `${rate}%`, plural('sl_CallsCount', tot.deflected, { one: '{n} call', other: '{n} calls' }), changePoints(rate, prevRate)),
-      tile(t('sl_TileToPerson', 'Put Through to a Person'), count(tot.to_person), sub(t('sl_OfCalls', '{pct}% of calls'), { pct: pct(tot.to_person, tot.calls) }), changeLine(tot.to_person, prev.to_person))),
+      // Comparisons only make sense against a period that had calls (not before the line was set up).
+      tile(t('sl_TileCalls', 'Calls'), count(tot.calls), null, prev.calls
+        ? changeLine(tot.calls, prev.calls) : el('div', { class: 'sl-change', text: t('sl_NoPreviousCalls', 'No calls in the previous period') })),
+      tile(t('sl_TileHeard', 'Heard Their Status'), count(tot.hits), sub(t('sl_OfCalls', '{pct}% of calls'), { pct: pct(tot.hits, tot.calls) }), prev.calls ? changeLine(tot.hits, prev.hits) : null),
+      tile(t('sl_TileDeflected', 'Needed No Person'), rate === null ? null : `${rate}%`, plural('sl_CallsCount', tot.deflected, { one: '{n} call', other: '{n} calls' }), prev.calls ? changePoints(rate, prevRate) : null),
+      tile(t('sl_TileToPerson', 'Put Through to a Person'), count(tot.to_person), sub(t('sl_OfCalls', '{pct}% of calls'), { pct: pct(tot.to_person, tot.calls) }), prev.calls ? changeLine(tot.to_person, prev.to_person) : null)),
     el('div', { class: 'sl-note', text: t('sl_DeflectedNote', '"Needed no person" means the caller heard a status and the call ended without reaching anyone. Callers who hang up during the greeting count as calls, not as statuses heard.') }),
     el('div', { class: 'sl-section-head' }, el('h4', { class: 'ui header', text: t('sl_ByDay', 'Calls by Day') })),
     el('div', { class: 'sl-chart', id: 'sl-chart-trend' }),

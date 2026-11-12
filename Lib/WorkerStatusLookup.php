@@ -41,13 +41,25 @@ class WorkerStatusLookup extends WorkerBase
     /** The nightly clean-up runs at this hour, PBX time. */
     private const int MAINTENANCE_HOUR = 3;
 
+    /** How long the worker waits for the database's write lock; an import may hold it for a moment. */
+    private const int LOCK_WAIT_MS = 1000;
+
+    /** A record the database was too busy for goes back to the queue this many seconds later, at most this often. */
+    private const int RETRY_DELAY = 5;
+
+    private const int MAX_RETRIES = 120;
+
     private CallLogStore $store;
 
     private int $nextMaintenance = 0;
 
     public function start(array $argv): void
     {
-        $this->store = new CallLogStore(Databases::openWritable(StatusLookupConf::moduleDbFile()));
+        $db = Databases::openWritable(StatusLookupConf::moduleDbFile());
+        // Short waits keep the worker answering the supervisor's pings while an import writes; a record that
+        // can't wait goes back to the queue (onRecord).
+        $db->exec('PRAGMA busy_timeout = ' . self::LOCK_WAIT_MS);
+        $this->store = new CallLogStore($db);
 
         $client = new BeanstalkClient(self::class);
         $client->subscribe(self::class, [$this, 'onRecord']);
@@ -90,12 +102,36 @@ class WorkerStatusLookup extends WorkerBase
         try {
             $record = Handoff::decode($message->getBody());
             $this->store->record($record, StatusLookupConf::timezone());
+        } catch (\PDOException $e) {
+            if (!str_contains($e->getMessage(), 'database is locked')) {
+                SystemMessages::sysLogMsg(static::class, 'Storing a call record failed: ' . $e->getMessage(), LOG_ERR);
+                return;
+            }
+            $this->retryLater($message);
         } catch (InvalidArgumentException $e) {
             SystemMessages::sysLogMsg(static::class, 'Call record rejected: ' . $e->getMessage(), LOG_WARNING);
         } catch (Throwable $e) {
             // Logged, not rethrown: a rethrow would bury the job and stop nothing.
             SystemMessages::sysLogMsg(static::class, 'Storing a call record failed: ' . $e->getMessage(), LOG_ERR);
         }
+    }
+
+    /**
+     * The database was busy (a large import): the record goes back to the
+     * queue a few seconds later, with a count, so nothing is lost and the
+     * worker isn't stuck waiting. The worker drops a record it already has,
+     * so a retry can't log a call twice.
+     */
+    private function retryLater(BeanstalkClient $message): void
+    {
+        $body = json_decode($message->getBody(), true);
+        $retries = is_array($body) ? (int)($body['retries'] ?? 0) + 1 : self::MAX_RETRIES + 1;
+        if ($retries > self::MAX_RETRIES) {
+            SystemMessages::sysLogMsg(static::class, 'Call record dropped: the database stayed busy', LOG_ERR);
+            return;
+        }
+        $body['retries'] = $retries;
+        $message->publish(json_encode($body, JSON_THROW_ON_ERROR), self::class, delay: self::RETRY_DELAY);
     }
 
     /**

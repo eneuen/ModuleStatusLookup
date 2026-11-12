@@ -47,6 +47,10 @@ final class Databases
         ]);
         $pdo->exec('PRAGMA busy_timeout = ' . self::BUSY_TIMEOUT_MS);
         $pdo->exec('PRAGMA foreign_keys = OFF');
+        // Write-ahead log: a lookup during a calls' busy hour never waits for an import or the worker to finish
+        // writing (with the default rollback journal, a large write locks readers out until it commits). The
+        // mode stays with the file; asking again is a no-op.
+        $pdo->exec('PRAGMA journal_mode = WAL');
 
         return $pdo;
     }

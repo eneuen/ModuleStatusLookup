@@ -73,7 +73,8 @@ SETTINGS = {
 # --------------------------------------------------------------------------- the PBX side
 
 def sql(statement):
-    return docker("exec", PBX_CONTAINER, "sqlite3", "-json", MODULE_DB, statement, capture=True).strip()
+    # The module's worker and imports write too: wait for their lock instead of failing.
+    return docker("exec", PBX_CONTAINER, "sqlite3", "-cmd", ".timeout 10000", "-json", MODULE_DB, statement, capture=True).strip()
 
 
 def rows(statement):
@@ -640,6 +641,143 @@ def no_phone_stored(p, c):
     c.that(rang(op, 15), "the operator rings")
     caller.hangup(); pause(2)
     check_row(c, p, log_id, outcome="operator", last_result="no_phone", target=OPERATOR, misses=1)
+
+
+@scenario("The carrier dials the line's number itself as a DID, with no route for it: the lookup isn't reached.")
+def not_reachable_from_trunk(p, c):
+    since = log_size()
+    caller = Line("carrier")
+    caller.dial(p.number)
+    pause(8)
+    c.that(wait_event(since, "entry", timeout=1) is None, "no visit to the lookup")
+    caller.hangup(); pause(2)
+
+
+@scenario("A caller put through to the operator talks for longer than the lookup's 2-minute limit: the call isn't cut "
+          "(takes about 2.5 minutes).")
+def long_conversation_after_lookup(p, c):
+    since = log_size()
+    caller, op = call_in(p), Line(OPERATOR)
+    t0 = time.time()
+    enter(since, caller, "0#")
+    c.that(rang(op, 15), "the operator rings")
+    op.answer()
+    pause(max(0, 135 - (time.time() - t0)))
+    c.that(not closed(caller, 1) and not closed(op, 1), f"still talking after {time.time() - t0:.0f} s")
+    op.hangup(); pause(2)
+
+
+@scenario("A caller ID of 123;Hangup() with a name that is HTML: the lookup runs and the call log keeps only the digits.")
+def hostile_caller_id(p, c):
+    since, log_id = log_size(), p.last_log_id()
+    script = ("require_once 'Globals.php'; $r = MikoPBX\\Core\\System\\Util::getAstManager('off')->Originate("
+              f"'Local/{p.number}@internal', 's', 'sl-probe-dtmf', 1, null, null, null,"
+              " '\"><img src=x onerror=alert(1)>\" <123;Hangup()>', null, null, true);"
+              " echo $r['Response'] ?? '';")
+    asterisk = lambda cmd: docker("exec", PBX_CONTAINER, "asterisk", "-rx", cmd, capture=True)
+    asterisk("dialplan remove context sl-probe-dtmf")
+    for n, app in enumerate(["Wait(1.5)", "SendDTMF(10445#,120)", "Wait(8)", "Hangup()"], start=1):
+        asterisk(f"dialplan add extension s,{n},{app} into sl-probe-dtmf")
+    try:
+        out = docker("exec", PBX_CONTAINER, "php", "-r", script, capture=True)
+        c.that("Success" in out, f"the call is placed ({out.strip()})")
+        c.that(wait_event(since, "lookup", timeout=20, result="hit") is not None, "the lookup runs")
+        found = p.logged(log_id, timeout=30)
+        c.that(len(found) == 1 and found[0]["caller"] == "123", f"logged with caller 123 ({[r['caller'] for r in found]})")
+    finally:
+        asterisk("dialplan remove context sl-probe-dtmf")
+
+
+@scenario("Values that would break out of the dialplan (a newline, a bracket, ${...}) are refused through the page, "
+          "and the generated dialplan doesn't change.")
+def dialplan_injection_refused(p, c):
+    import page_client
+    before = docker("exec", PBX_CONTAINER, "md5sum", "/etc/asterisk/extensions.conf", capture=True).split()[0]
+    bad = ["301)\nexten => s,1,System(id)", "301${SHELL(id)}", "3 01", "301,1"]
+    for value in bad:
+        res = page_client.post(p.pbx, "saveCallFlow", {"settings": json.dumps({"operator_number": value})})
+        c.that(not res.get("success") and res.get("message") == "destination", f"operator {value!r} refused ({res.get('message')})")
+    for field, value in [("transfer_number", "305)\nsame => n,Hangup"), ("code", "X)\n"), ("name", "a\nb${SHELL(id)}")]:
+        status = {"name": "Injection", "code": "INJECT", "script": "", "prompt_id": str(PROMPT), "spoken_extra": "none",
+                  "after_action": "transfer", "transfer_number": "305", field: value}
+        res = page_client.post(p.pbx, "saveStatus", {"status": json.dumps(status)})
+        stored = rows("SELECT name FROM m_StatusLookupStatuses WHERE code = 'INJECT'")
+        if field == "name" and res.get("success"):
+            # Names are for staff and never reach the dialplan; control characters are dropped.
+            c.that(stored and "\n" not in stored[0]["name"], f"a name with a newline is stored without it ({stored})")
+        else:
+            c.that(not res.get("success"), f"status {field} {value!r} refused ({res.get('message')})")
+        sql("DELETE FROM m_StatusLookupStatuses WHERE code = 'INJECT'")
+    reload_dialplan()
+    time.sleep(5)
+    after = docker("exec", PBX_CONTAINER, "md5sum", "/etc/asterisk/extensions.conf", capture=True).split()[0]
+    c.that(before == after, "extensions.conf is unchanged")
+
+
+CF_DB = "/storage/usbdisk1/mikopbx/custom_modules/ModuleCallFeedback/db/module.db"
+
+
+def cf_sql(statement):
+    return docker("exec", PBX_CONTAINER, "sqlite3", "-cmd", ".timeout 10000", CF_DB, statement, capture=True).strip()
+
+
+@scenario("With the Call Feedback module surveying the probe's route: a caller who only used the lookup isn't surveyed; "
+          "one the lookup put through to the operator, who answered, is. (Skipped without an active Call Feedback survey.)")
+def with_call_feedback(p, c):
+    active = docker("exec", PBX_CONTAINER, "sh", "-c",
+                    f"sqlite3 /cf/conf/mikopbx.db \"SELECT disabled FROM m_PbxExtensionModules WHERE uniqid = 'ModuleCallFeedback'\" 2>/dev/null; "
+                    f"[ -f {CF_DB} ] && sqlite3 {CF_DB} \"SELECT family_id FROM m_Surveys WHERE status = 'active' LIMIT 1\"", capture=True).split()
+    if len(active) != 2 or active[0] != "0":
+        c.that(True, "skipped: Call Feedback isn't installed and enabled with an active survey")
+        return
+    family = int(active[1])
+    target = cf_sql(f"INSERT INTO m_SurveyTargets (family_id, direction, route_id) VALUES ({family}, 'in', {p.route_id}); SELECT last_insert_rowid()")
+    try:
+        reload_dialplan()
+        deadline = time.time() + 30
+        while PROBE_DID not in docker("exec", PBX_CONTAINER, "asterisk", "-rx", "dialplan show call-feedback-in-match", check=False, capture=True):
+            if time.time() > deadline:
+                raise RuntimeError("Call Feedback's dialplan never covered the probe's route")
+            time.sleep(1)
+
+        # Only the lookup: status, goodbye, the line hangs up.
+        since = log_size()
+        caller = call_in(p)
+        enter(since, caller, "00451#")
+        c.that(wait_event(since, "goodbye", timeout=30) is not None, "lookup only: goodbye")
+        closed(caller, 10)
+        skip = None
+        deadline = time.time() + 10
+        while skip is None and time.time() < deadline:
+            out = docker("exec", PBX_CONTAINER, "sh", "-c", f"tail -c +{since + 1} {VERBOSE_LOG} | grep 'CFPROBE event=' || true", capture=True)
+            if "event=skip" in out or "event=in_talk" in out:
+                skip = out
+            time.sleep(0.5)
+        c.that(skip is not None and "reason=no_agent" in skip and "event=in_talk" not in skip,
+               f"lookup only: Call Feedback skips it, no agent answered ({(skip or '').strip()[-120:]})")
+
+        # Put through to the operator, who answers and talks.
+        since = log_size()
+        caller, op = call_in(p), Line(OPERATOR)
+        enter(since, caller, "0#")
+        c.that(rang(op, 15), "0: the operator rings")
+        op.answer()
+        pause(6)
+        op.hangup()
+        talk = None
+        deadline = time.time() + 15
+        while talk is None and time.time() < deadline:
+            out = docker("exec", PBX_CONTAINER, "sh", "-c", f"tail -c +{since + 1} {VERBOSE_LOG} | grep 'CFPROBE event=in_talk' || true", capture=True)
+            talk = re.search(r"cf_talk=(\d+)", out)
+            time.sleep(0.5)
+        # Call Feedback 1.0 counts talk time from when the caller's channel was answered, which for any IVR that
+        # hands callers to an extension (the core's menus too) includes the time in the IVR; so only "at least".
+        c.that(talk is not None and int(talk.group(1)) >= 5,
+               f"through the operator: offered the survey ({talk.group(1) if talk else None} s of talk counted)")
+        caller.hangup()
+    finally:
+        cf_sql(f"DELETE FROM m_SurveyTargets WHERE id = {int(target)}")
+        reload_dialplan()
 
 
 # --------------------------------------------------------------------------- running

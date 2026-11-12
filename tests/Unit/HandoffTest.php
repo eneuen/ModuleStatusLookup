@@ -32,6 +32,17 @@ final class HandoffTest extends TestCase
         self::assertSame($record, Handoff::decode(Handoff::encode($record)));
     }
 
+    public function testARetriedRecordAndAnOlderOneStillDecode(): void
+    {
+        $record = Handoff::fromChannel('1794398400.42', self::vars(), 1794398500);
+        // The worker puts a record it couldn't store back on the queue with a retry count.
+        self::assertSame($record, Handoff::decode(json_encode($record + ['retries' => 3], JSON_THROW_ON_ERROR)));
+        // A record queued by the previous version has no PIN fields.
+        $old = $record;
+        unset($old['pin_fails'], $old['pin_id']);
+        self::assertSame(['pin_fails' => '', 'pin_id' => ''], array_intersect_key(Handoff::decode(json_encode($old, JSON_THROW_ON_ERROR)), ['pin_fails' => 1, 'pin_id' => 1]));
+    }
+
     public function testHangUpBeforeLeavingUsesNow(): void
     {
         $record = Handoff::fromChannel('1.1', self::vars(['SL_LEFT' => '', 'SL_OUTCOME' => 'abandoned', 'SL_RESULT' => '']), 1794398500);

@@ -220,6 +220,7 @@ return [
     'sl_NoImports' => 'No imports yet.',
     'sl_NoLogCalls' => 'No calls.',
     'sl_NoMatches' => 'No records match these filters.',
+    'sl_NoPreviousCalls' => 'No calls in the previous period',
     'sl_NoPrompt' => 'None',
     'sl_NoRecords' => 'No records yet. Add them one by one, or import a CSV file from your shop software or spreadsheet.',
     'sl_NoSoundFiles' => 'The PBX has no sound files yet. Upload a recording of the sentence on its Sound files page first.',
