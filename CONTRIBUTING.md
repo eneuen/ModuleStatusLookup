@@ -86,7 +86,7 @@ The core creates the module's tables from the model annotations in `Models/` on 
 | `Lib/Retention.php` | Call-log retention, purging expired records, and "forget" |
 | `Lib/Activity.php` | The Activity tab's numbers and the call log |
 | `Lib/RecordsApi.php`, `Lib/RestAPI/` | The REST API's logic, and its routes and processors |
-| `Lib/BuiltInPrompts.php`, `Sounds/` | The module's own prompts (`Sounds/` comes with the recordings) |
+| `Lib/BuiltInPrompts.php`, `Sounds/` | The module's own prompts: their IDs and names, and the recordings in `Sounds/en-en` and `Sounds/ru-ru` (CC0, `Sounds/LICENSE`) |
 | `Lib/PbxOptions.php` | What the page picks from in the PBX: sound files, destinations, extensions |
 | `Lib/AccessPolicy.php` | Who may use the page, and what a write request must carry |
 | `Lib/Databases.php`, `Lib/Settings.php` | Database connections and transactions; the module's settings row |

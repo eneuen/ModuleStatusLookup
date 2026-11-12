@@ -6,7 +6,7 @@ A MikoPBX extension module that answers "Is it ready yet?" calls without a perso
 
 It suits any business whose customers call to ask where something stands: device and IT repair, auto workshops, pharmacies, shops and online stores.
 
-> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md). The built-in prompts aren't recorded yet: until they are, choose one of your own sound files for every prompt on the Call Flow tab before switching the line on.
+> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md).
 
 ![The Records tab: each ID with its status, date, last day, note and last change, with search, filters and CSV export](docs/screenshots/records.png)
 

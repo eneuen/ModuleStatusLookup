@@ -41,6 +41,13 @@ for f in module.json LICENSE Lib/StatusLookupConf.php Setup/PbxExtensionSetup.ph
          public/assets/js/status-lookup.js public/assets/js/vendor/echarts.min.js; do
     [ -f "$f" ] || { echo "Missing from the package: $f" >&2; exit 1; }
 done
+# Every built-in prompt in every language the module ships (Lib/BuiltInPrompts.php), and their licence.
+[ -f Sounds/LICENSE ] || { echo "Missing from the package: Sounds/LICENSE" >&2; exit 1; }
+for lang in en-en ru-ru; do
+    for key in welcome enter-id enter-pin invalid not-found repeat goodbye transfer fault; do
+        [ -f "Sounds/$lang/$key.wav" ] || { echo "Missing from the package: Sounds/$lang/$key.wav" >&2; exit 1; }
+    done
+done
 for f in Setup/templates/*.json; do
     php -r 'json_decode(file_get_contents($argv[1]), false, 16, JSON_THROW_ON_ERROR);' "$f" || { echo "Not valid JSON: $f" >&2; exit 1; }
 done
