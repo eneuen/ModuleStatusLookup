@@ -4,6 +4,8 @@ All notable changes to this module are listed here. Versions follow [Semantic Ve
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-12
+
 The first version of Status Lookup: a self-service status line for MikoPBX 2026.6.34 or later, where callers type their ticket, order or prescription number and hear where it stands.
 
 Added:
