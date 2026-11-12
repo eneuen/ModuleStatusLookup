@@ -2,7 +2,7 @@
   "key": "retail",
   "order": 4,
   "name": { "en": "Retail and E-Commerce", "ru": "Магазин и интернет-магазин" },
-  "description": { "en": "Callers enter their order number.", "ru": "Звонящий вводит номер заказа." },
+  "description": { "en": "Callers type their order number.", "ru": "Звонящий вводит номер заказа." },
   "id_length": [5, 8],
   "statuses": [
     { "code": "PROCESSING", "name": { "en": "Being processed", "ru": "Обрабатывается" }, "extra": "none", "after": "repeat",
@@ -10,12 +10,12 @@
     { "code": "PACKED", "name": { "en": "Packed", "ru": "Упакован" }, "extra": "none", "after": "repeat",
       "script": { "en": "Your order is packed and will be shipped soon.", "ru": "Ваш заказ упакован и скоро будет отправлен." } },
     { "code": "SHIPPED", "name": { "en": "Shipped", "ru": "Отправлен" }, "extra": "date", "after": "repeat",
-      "script": { "en": "Your order was shipped on", "ru": "Ваш заказ отправлен" } },
+      "script": { "en": "Your order was shipped on…", "ru": "Ваш заказ отправлен…" } },
     { "code": "DELIVERED", "name": { "en": "Delivered", "ru": "Доставлен" }, "extra": "none", "after": "repeat",
       "script": { "en": "Your order has been delivered.", "ru": "Ваш заказ доставлен." } },
     { "code": "DELAYED", "name": { "en": "Delayed", "ru": "Задерживается" }, "extra": "none", "after": "person",
-      "script": { "en": "Your order is delayed. Please speak to us about it.", "ru": "Ваш заказ задерживается. Пожалуйста, обсудите его с нашим сотрудником." } },
+      "script": { "en": "Your order is delayed. We are sorry.", "ru": "Ваш заказ задерживается, приносим извинения." } },
     { "code": "RETURN_RECEIVED", "name": { "en": "Return received", "ru": "Возврат получен" }, "extra": "none", "after": "repeat",
-      "script": { "en": "We have received your return.", "ru": "Мы получили ваш возврат." } }
+      "script": { "en": "We have received your return.", "ru": "Мы получили возвращённый вами товар." } }
   ]
 }

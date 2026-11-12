@@ -12,7 +12,7 @@ CallSim places real SIP calls through a disposable MikoPBX test instance, so the
 
 Test layout on the PBX:
 
-| Object | Number | Behaviour |
+| Object | Number | Behavior |
 | --- | --- | --- |
 | Extensions | 301-305 | Plain extensions; in the probe, 301 is the operator, 304 the fault destination and 305 a status's own destination |
 | Queue | 3100 | Rings 302 and 303 together; the probe's too-many-tries destination |

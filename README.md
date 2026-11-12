@@ -18,7 +18,7 @@ The screenshots show a test PBX with simulated calls; the IDs, notes and numbers
   <tr>
     <td width="50%" valign="top">
       <a href="docs/screenshots/statuses.png"><img src="docs/screenshots/statuses.png" alt="The Statuses tab: each status with its recorded sentence, what is said after it and what happens next"></a>
-      <br><b>Statuses.</b> The statuses records can have, each with its recorded sentence and what happens after it.
+      <br><b>Statuses.</b> The statuses a record can have, each with its recorded sentence and what happens after it.
     </td>
     <td width="50%" valign="top">
       <a href="docs/screenshots/import.png"><img src="docs/screenshots/import.png" alt="The Import tab: a checked file with how many records are new, changed and left out, and the rows left out with their reasons"></a>
@@ -80,7 +80,7 @@ The line behaves like the PBX's own IVR menus: it has its own row in the call hi
 
 **Import:** a CSV file in UTF-8 with a header row; `lookup_id` and `status_code` are needed, `note`, `expires`, `date`, `pin` and `phone` optional. **Add and Update** adds new IDs and changes existing ones; **Replace All** also deletes records that aren't in the file (but never one whose row was left out for a mistake). **Check File** shows what would happen first; nothing changes until you press Import. A file of up to 5 MB and 100,000 rows is applied in one go, while calls keep being answered.
 
-**Statuses:** the statuses records can have, in the order staff see them. **Add from Template…** adds a business's statuses you don't have yet.
+**Statuses:** the statuses a record can have, in the order staff see them. **Add from Template…** adds a business's statuses you don't have yet.
 
 **Activity:** for any period up to a year: calls, how many heard their status, the share that needed no person, where the others went, calls by day, the busiest hours, the IDs callers typed most that weren't found (each with **Find in Records**), and the call log. Test calls are marked and left out of the numbers.
 
@@ -90,8 +90,8 @@ The line behaves like the PBX's own IVR menus: it has its own row in the call hi
 
 - **PIN:** a status can ask for the record's PIN (4 to 8 digits) before it is told; the pharmacy template does. PINs are stored only as keyed hashes and can't be shown or exported.
 - **Own phone only:** a status can be told only to a caller calling from the number saved on the record.
-- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. Once a caller number has 10 misses in an hour, or all callers together have 200 (both by default; you can change them), the next ID they type goes straight to the operator instead of being looked up. After 10 wrong PINs for one ID in a day, from any callers, test calls included, that ID's PIN is no longer asked for.
-- **Call log:** callers' numbers and the IDs they typed are kept as long as the PBX keeps its call history (if that is under 30 days, as in the PBX itself, for ever), or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes one ID's record, the logged calls for it and its wrong-PIN counts, or every logged call from one caller number and that number on records.
+- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. Once a caller number has 10 misses in an hour, or all callers together have 200 (both by default; you can change them), the next ID they type goes straight to the operator instead of being looked up. After 10 wrong PINs for one ID in a day, from any callers, test calls included, that ID's PIN is no longer asked for: callers with that ID are put through to the operator instead.
+- **Call log:** callers' numbers and the IDs they typed are kept for as long as the PBX keeps its call history (forever, if the PBX's setting is under 30 days), or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes one ID's record, the logged calls for it and its wrong-PIN counts, or every logged call from one caller number and that number on records.
 - MikoPBX's own Asterisk log records every key pressed on any call, IDs and PINs included; that is a PBX-wide setting outside the module.
 
 See [SECURITY.md](SECURITY.md) for what the module exposes and how to report a problem.
@@ -109,9 +109,9 @@ Shop, POS or ticketing software can keep the records up to date through the PBX'
 | POST | `records:import` | Imports a CSV file (add and update): `{"csv": "...", "dryRun": true}`. With `dryRun`, nothing changes and the answer says what would. |
 | POST | `records-replace:import` | The same, but the file becomes the full list: records not in it are deleted. |
 | GET | `statuses` | The status codes records can have. |
-| GET | `stats?from=YYYY-MM-DD&to=YYYY-MM-DD` | The Activity tab's totals for up to a year of PBX days. |
+| GET | `stats?from=YYYY-MM-DD&to=YYYY-MM-DD` | The Activity tab's totals for a period of up to 366 days, in PBX time. |
 
-A record ID is the digits callers type, and leading zeros count. The fields PUT accepts are `status_code` (needed for a new record), `note` (for staff, never spoken), `status_date` and `expires_on` (YYYY-MM-DD), `phone`, `pin` (4 to 8 digits; only ever written, never shown) and `remove_pin` (true). Anything else is refused, so a misspelt field never goes unnoticed. The CSV format is the Import tab's; the CSV travels inside the JSON body, which the PBX limits to 4 MB.
+A record ID is the digits callers type, and leading zeros count. The fields PUT accepts are `status_code` (needed for a new record), `note` (for staff, never spoken), `status_date` and `expires_on` (YYYY-MM-DD), `phone`, `pin` (4 to 8 digits; only ever written, never shown) and `remove_pin` (true). Anything else is refused, so a misspelled field never goes unnoticed. The CSV format is the Import tab's; the CSV travels inside the JSON body, which the PBX limits to 4 MB.
 
 ```bash
 curl -X PUT "https://pbx.example.com/pbxcore/api/v3/module-status-lookup/records/10445" \
@@ -137,7 +137,7 @@ Administrators only. The page and every action refuse anyone else, and the REST 
 
 ## Disabling and uninstalling
 
-Disabling switches the line off and hides its number from the destination lists; calls to the number fail meanwhile, so point routes elsewhere before disabling it for more than a moment. Enabling brings everything back as it was.
+Disabling switches the line off and hides its number from the destination lists; calls sent to the number aren't answered meanwhile, so point routes elsewhere before disabling it for more than a moment. Enabling brings everything back as it was.
 
 Uninstalling with **keep settings** keeps the records, statuses, settings, call log and PIN key for a later reinstall. Without it, all of those are deleted and the number is released in MikoPBX. A number that something still points at (an incoming route, an IVR menu option or an off-work time rule) can't be released and stays registered, so change those first; a later install takes it back, and those routes work again.
 

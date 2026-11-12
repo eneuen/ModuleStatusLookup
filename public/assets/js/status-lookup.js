@@ -73,7 +73,7 @@
   };
   var fieldName = (f) => FIELDS[f] ? t(FIELDS[f][0], FIELDS[f][1]) : f;
   var PROBLEMS = {
-    no_number: ["sl_Problem_no_number", "It has no internal number."],
+    no_number: ["sl_Problem_no_number", "The line has no internal number. Enter one under Where Callers Come From."],
     not_registered: ["sl_Problem_not_registered", "Its number belongs to something else in the PBX. Choose another number."],
     no_operator: ["sl_Problem_no_operator", "Choose where 0 sends callers (the operator)."],
     gone_too_many_tries_number: ["sl_Problem_gone_too_many", "The destination after the last try no longer exists."],
@@ -101,19 +101,19 @@
     if (PROBLEMS[code]) return t(PROBLEMS[code][0], PROBLEMS[code][1]);
     const prompt = code.startsWith("prompt_") ? `${code.slice(7)}_prompt_id` : null;
     if (prompt && FIELDS[prompt]) {
-      return sub(t("sl_Problem_prompt", `The prompt "{prompt}" can't be played. Choose another one.`), { prompt: fieldName(prompt) });
+      return sub(t("sl_Problem_prompt", `The "{prompt}" prompt can't be played. Choose another sound file.`), { prompt: fieldName(prompt) });
     }
     return code;
   }
   var ERRORS = {
     bad_request: ["sl_Err_bad_request", "The page sent a request the server couldn't read. Reload the page and try again."],
     failed: ["sl_Err_failed", "Something went wrong. Try again; if it keeps happening, check the PBX's system log."],
-    refused: ["sl_Err_refused", "The PBX refused this change. Its system log says why."],
-    prompt: ["sl_Err_prompt", `The prompt for "{field}" can't be played. Choose another one.`],
-    range: ["sl_Err_range", 'Enter a whole number from {min} to {max} for "{field}".'],
-    whole_number: ["sl_Err_whole_number", 'Enter a whole number for "{field}".'],
-    destination: ["sl_Err_destination", 'Choose "{field}" from the list.'],
-    lengths_exclude: ["sl_Err_lengths_exclude", "Some records have IDs outside these lengths."],
+    refused: ["sl_Err_refused", "The PBX refused this change. Reload the page and try again; if it keeps happening, the PBX's system log says why."],
+    prompt: ["sl_Err_prompt", `The "{field}" prompt can't be played. Choose another sound file.`],
+    range: ["sl_Err_range", '"{field}": enter a whole number from {min} to {max}.'],
+    whole_number: ["sl_Err_whole_number", '"{field}": enter a whole number.'],
+    destination: ["sl_Err_destination", 'Choose a destination for "{field}" from the list.'],
+    lengths_exclude: ["sl_Err_lengths_exclude", "Some records have IDs outside these lengths. Change the lengths, or those records' IDs."],
     lengths: ["sl_Err_lengths", "The shortest ID can't be longer than the longest."],
     not_ready: ["sl_Err_not_ready", "The line can't be switched on yet: {problems}"],
     number_format: ["sl_Err_number_format", "Enter 2 to 8 digits, not starting with 0."],
@@ -121,9 +121,9 @@
     file_size: ["sl_Err_file_size", "The file is larger than {max} MB. Split it, or import only the records that changed."],
     file_missing: ["sl_Err_file_missing", "The file didn't arrive. Choose it again."],
     file_encoding: ["sl_Err_file_encoding", `The file isn't UTF-8 text. In your spreadsheet, save it as "CSV UTF-8".`],
-    file_empty: ["sl_Err_file_empty", "The file is empty."],
+    file_empty: ["sl_Err_file_empty", "The file is empty. Choose another file."],
     file_header: ["sl_Err_file_header", "The first row must name the columns, with at least lookup_id and status_code."],
-    file_rows: ["sl_Err_file_rows", "The file has more than {max} rows."],
+    file_rows: ["sl_Err_file_rows", "The file has more than {max} rows. Split it and import each part with Add and Update."],
     statuses_changed: ["sl_Err_statuses_changed", "The statuses changed while the file was being checked. Check the file again."],
     replace_empty: ["sl_Err_replace_empty", "No row in the file can be imported, so Replace All would delete every record. Nothing was changed."],
     lookup_id: ["sl_Err_lookup_id", "Enter the ID as {min} to {max} digits, as callers type it (the lengths are set on the Call Flow tab)."],
@@ -132,16 +132,16 @@
     record_gone: ["sl_Err_record_gone", "This record no longer exists. Reload the page."],
     note: ["sl_Err_note", "Keep the note to {max} characters."],
     date: ["sl_Err_date", 'Enter a valid date for "{field}".'],
-    bulk: ["sl_Err_bulk", "Choose 1 to {max} records."],
+    bulk: ["sl_Err_bulk", "Select up to {max} records at a time."],
     template: ["sl_Err_template", "This template can't be used. Reload the page."],
     script: ["sl_Err_script", "Keep the wording to {max} characters."],
     status_gone: ["sl_Err_status_gone", "This status no longer exists. Reload the page."],
-    code_format: ["sl_Err_code_format", "Use 1 to 32 capital letters, digits and _ for the code, such as READY."],
+    code_format: ["sl_Err_code_format", "Use up to 32 letters A\u2013Z, digits and _ for the code, such as READY."],
     code_taken: ["sl_Err_code_taken", "Another status already has the code {code}."],
     name: ["sl_Err_name", "Enter a name of up to {max} characters."],
     status_prompt: ["sl_Err_status_prompt", "Choose the sound file with the sentence the caller hears."],
     status_destination: ["sl_Err_status_destination", "Choose where to put the caller through to."],
-    too_many_statuses: ["sl_Err_too_many_statuses", "Up to {max} statuses."],
+    too_many_statuses: ["sl_Err_too_many_statuses", "You can have up to {max} statuses. Delete one you no longer use first."],
     move_to: ["sl_Err_move_to", "Choose another status to move the records to."],
     status_in_use: ["sl_Err_status_in_use", "Records still have this status. Choose a status to move them to."],
     test_extension: ["sl_Err_test_extension", "Choose an extension from the list."],
@@ -169,9 +169,9 @@
     box.scrollIntoView({ block: "nearest" });
   }
   var clearError = () => $id("sl-error").classList.add("sl-hidden");
-  var saveFailed = (xhr) => failText(xhr, t("sl_SaveFailed", "The change could not be saved."));
+  var saveFailed = (xhr) => failText(xhr, t("sl_SaveFailed", "The change couldn't be saved. Try again."));
   function get(action, data = {}) {
-    return $.ajax({ url: BASE + action, method: "GET", data, dataType: "json" }).then((r) => r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })).fail((xhr) => showError(failText(xhr, t("sl_LoadFailed", "Status Lookup could not load this data."))));
+    return $.ajax({ url: BASE + action, method: "GET", data, dataType: "json" }).then((r) => r && r.success ? r.data : $.Deferred().reject({ responseJSON: r })).fail((xhr) => showError(failText(xhr, t("sl_LoadFailed", "Status Lookup couldn't load this data. Reload the page to try again."))));
   }
   function post(action, data) {
     clearError();
@@ -290,15 +290,15 @@
     });
   }
   var BUILT_IN_NAMES = {
-    welcome: ["sl_BuiltIn_welcome", "Built-In: Thank You for Calling"],
-    "enter-id": ["sl_BuiltIn_enter-id", "Built-In: Enter Your Reference Number"],
-    "enter-pin": ["sl_BuiltIn_enter-pin", "Built-In: Enter Your PIN"],
-    invalid: ["sl_BuiltIn_invalid", "Built-In: Not a Valid Number"],
-    "not-found": ["sl_BuiltIn_not-found", "Built-In: We Could Not Find That Number"],
-    repeat: ["sl_BuiltIn_repeat", "Built-In: 1 to Hear Again, 0 for Someone"],
-    goodbye: ["sl_BuiltIn_goodbye", "Built-In: Goodbye"],
-    transfer: ["sl_BuiltIn_transfer", "Built-In: Putting You Through"],
-    fault: ["sl_BuiltIn_fault", "Built-In: We Can't Check Right Now"]
+    welcome: ["sl_BuiltIn_welcome", "Built-in: Thank You for Calling"],
+    "enter-id": ["sl_BuiltIn_enter-id", "Built-in: Enter Your Reference Number"],
+    "enter-pin": ["sl_BuiltIn_enter-pin", "Built-in: Enter Your PIN"],
+    invalid: ["sl_BuiltIn_invalid", "Built-in: Not a Valid Number"],
+    "not-found": ["sl_BuiltIn_not-found", "Built-in: We Couldn't Find That Number"],
+    repeat: ["sl_BuiltIn_repeat", "Built-in: 1 to Hear Again, 0 for a Person"],
+    goodbye: ["sl_BuiltIn_goodbye", "Built-in: Goodbye"],
+    transfer: ["sl_BuiltIn_transfer", "Built-in: Putting You Through"],
+    fault: ["sl_BuiltIn_fault", "Built-in: We Can't Check Right Now"]
   };
   function promptFile(id) {
     const n = Number(id);
@@ -319,7 +319,7 @@
       ...placeholder ? [["", placeholder]] : [],
       ...missing ? [[value, t("sl_MissingPrompt", "Missing Sound File")]] : [],
       ...withNone ? [["0", t("sl_NoPrompt", "None")]] : [],
-      ...builtIn.length ? [{ group: t("sl_BuiltInPrompts", "Built-In Prompts"), options: builtIn }] : [],
+      ...builtIn.length ? [{ group: t("sl_BuiltInPrompts", "Built-in Prompts"), options: builtIn }] : [],
       ...files.length ? [{ group: t("sl_SoundFiles", "Sound Files"), options: files }] : []
     ];
   }
@@ -364,20 +364,20 @@
   }
   var PROMPTS = [
     ["welcome_prompt_id", ["welcome"], true, ["sl_PromptWelcomeHint", "Played once, as the call is answered. Callers can start typing during it."]],
-    ["enter_id_prompt_id", ["enter-id"], false, ["sl_PromptEnterIdHint", "Asks for the ID and says that 0 reaches someone."]],
+    ["enter_id_prompt_id", ["enter-id"], false, ["sl_PromptEnterIdHint", "Asks for the ID and says that 0 reaches a person."]],
     ["enter_pin_prompt_id", ["enter-pin"], false, ["sl_PromptEnterPinHint", "Only for statuses that ask for the record's PIN."]],
     ["invalid_prompt_id", ["invalid"], false, ["sl_PromptInvalidHint", "After an entry that is too short, too long or empty."]],
-    ["not_found_prompt_id", ["not-found"], false, ["sl_PromptNotFoundHint", "After an ID that isn't found or has expired."]],
-    ["repeat_prompt_id", ["repeat"], false, ["sl_PromptRepeatHint", "After a status: 1 to hear it again, 0 for someone."]],
+    ["not_found_prompt_id", ["not-found"], false, ["sl_PromptNotFoundHint", "After an ID that isn't found or has expired, a wrong PIN, or a call from the wrong number."]],
+    ["repeat_prompt_id", ["repeat"], false, ["sl_PromptRepeatHint", "After a status: 1 to hear it again, 0 for a person."]],
     ["goodbye_prompt_id", ["goodbye"], false, null],
     ["transfer_prompt_id", ["transfer"], false, ["sl_PromptTransferHint", "Before a caller is put through to a person."]],
-    ["fault_prompt_id", ["fault"], false, ["sl_PromptFaultHint", "When a lookup can't be done; the caller is then put through."]]
+    ["fault_prompt_id", ["fault"], false, ["sl_PromptFaultHint", "When a lookup fails, before the caller is put through."]]
   ];
   var NUMBER_FIELDS = [
     ["id_min_length", 2, 20, null],
     ["id_max_length", 2, 20, null],
     ["digit_timeout", 1, 30, ["sl_DigitTimeoutHint", "Seconds to wait for the first key and between keys. Callers end the ID with #, or wait this long."]],
-    ["max_tries", 1, 9, ["sl_MaxTriesHint", "Wrong or empty entries a caller gets before they are put through."]]
+    ["max_tries", 1, 9, ["sl_MaxTriesHint", "How many wrong or empty entries a caller can make before being put through."]]
   ];
   var USER_KINDS = {
     route: ["sl_UsedByRoute", 'Incoming route "{name}"'],
@@ -474,12 +474,12 @@
         field(
           fieldName("fault_number"),
           select("sl-fault_number", destinationOptions(t("sl_SameAsOperator", "Same as the Operator"), s.fault_number), s.fault_number, { class: "ui search dropdown" }),
-          t("sl_FaultHint", "When a status can't be played or its destination is gone. Callers first hear the apology.")
+          t("sl_FaultHint", "When a status can't be played, its destination is gone, or anything else fails. Callers hear the apology first.")
         )
       ),
       section(
         t("sl_SectionGuessing", "Guessing Protection"),
-        t("sl_SectionGuessingHint", "IDs typed that aren't found count as misses. A caller number with too many misses in the last hour is put straight through to the operator; so is everyone, when all callers together miss too often (callers who hide their number, or change it with every call). 0 turns a limit off."),
+        t("sl_SectionGuessingHint", "IDs that aren't found, wrong PINs and calls from the wrong number count as misses. When one caller number, or all callers together, reach their limit within an hour, the next ID they type goes straight to the operator. 0 turns a limit off."),
         el(
           "div",
           { class: "two fields" },
@@ -565,7 +565,7 @@
   }
   function retentionHint() {
     const cdr = state.options.cdrDays || 0;
-    return cdr >= 30 ? plural("sl_RetentionCdr", cdr, { one: "0: as long as the PBX keeps its call history (now {n} day).", other: "0: as long as the PBX keeps its call history (now {n} days)." }) : t("sl_RetentionForever", "0: as long as the PBX keeps its call history, which is now for ever.");
+    return cdr >= 30 ? plural("sl_RetentionCdr", cdr, { one: "0: as long as the PBX keeps its call history (now {n} day).", other: "0: as long as the PBX keeps its call history (now {n} days)." }) : t("sl_RetentionForever", "0: forever, because the PBX keeps its call history forever.");
   }
   function forgetPart() {
     return el(
@@ -583,7 +583,7 @@
         t("sl_ForgetId", "An ID"),
         "forgetId",
         "id",
-        t("sl_ForgetIdText", "The record {value} and every call that typed it are deleted."),
+        t("sl_ForgetIdText", "The record {value} and every logged call where it was typed are deleted."),
         (d) => `${d.records ? t("sl_ForgotRecord", "The record was deleted.") : t("sl_ForgotNoRecord", "There was no record with this ID.")} ${plural("sl_ForgotCalls", d.calls, { one: "{n} call was deleted from the call log.", other: "{n} calls were deleted from the call log." })}`
       ],
       phone: [
@@ -611,12 +611,12 @@
     const form = el("div", { class: "ui form" }, el(
       "div",
       { class: "two fields" },
-      field(t("sl_ForgetWhat", "Forget"), kind),
-      field(t("sl_ForgetValue", "Number"), input)
+      field(t("sl_ForgetWhat", "What to Forget"), kind),
+      field(t("sl_ForgetValue", "ID or Caller Number"), input)
     ), what);
     const ask = confirmDialog(
       t("sl_SectionForget", "Forget Someone's Data"),
-      t("sl_ForgetDialogText", "This deletes data at once and can't be undone."),
+      t("sl_ForgetDialogText", "This deletes the data at once. It can't be undone."),
       t("sl_Forget", "Forget"),
       form
     );
@@ -799,7 +799,7 @@
         el(
           "button",
           { class: "ui basic button", type: "button", onclick: (e) => applyTemplate(tpl, e.currentTarget) },
-          tpl.statuses.length ? t("sl_UseTemplate", "Use This Template") : t("sl_StartEmpty", "Start Empty")
+          tpl.statuses.length ? t("sl_UseTemplate", "Use This Template") : t("sl_StartEmpty", "Start from Scratch")
         )
       )))
     );
@@ -1036,7 +1036,7 @@ ${x.script}\r
     const status = select("sl-rec-status", statusChoices(t("sl_AllStatuses", "All Statuses")), records.query.status, { class: "ui dropdown", "aria-label": t("sl_ColStatus", "Status") });
     const stale = select(
       "sl-rec-stale",
-      [["0", t("sl_AnyUpdate", "Any Last Change")], ...[7, 30, 90].map((d) => [String(d), plural("sl_NotUpdatedIn", d, { one: "Not Changed in {n} Day", other: "Not Changed in {n} Days" })])],
+      [["0", t("sl_AnyUpdate", "Changed Any Time")], ...[7, 30, 90].map((d) => [String(d), plural("sl_NotUpdatedIn", d, { one: "Not Changed in {n} Day", other: "Not Changed in {n} Days" })])],
       records.query.stale,
       { class: "ui dropdown", "aria-label": t("sl_LastChange", "Last Change") }
     );
@@ -1253,7 +1253,7 @@ ${x.script}\r
         field(
           t("sl_ColPhone", "Phone"),
           el("input", { type: "tel", id: "sl-record-phone", value: v.phone, inputmode: "numeric", maxlength: "24", autocomplete: "off" }),
-          t("sl_RecordPhoneHint", "The customer's number, for statuses told only to the record's own phone.")
+          t("sl_RecordPhoneHint", "The customer's phone number, for statuses only callers from this number may hear.")
         ),
         field(
           t("sl_ColPin", "PIN"),
@@ -1336,11 +1336,11 @@ ${x.script}\r
   var REJECT_REASONS = {
     no_id: ["sl_Reject_no_id", "No ID"],
     id_length: ["sl_Reject_id_length", "ID too short or too long"],
-    duplicate: ["sl_Reject_duplicate", "Same ID as an earlier row (row number in brackets)"],
+    duplicate: ["sl_Reject_duplicate", "Same ID as an earlier row (its row number is in parentheses)"],
     status: ["sl_Reject_status", "Unknown status code"],
     note: ["sl_Reject_note", "Note longer than 200 characters"],
     pin: ["sl_Reject_pin", "PIN isn't 4 to 8 digits"],
-    phone: ["sl_Reject_phone", "Phone isn't a phone number (7 to 20 digits)"],
+    phone: ["sl_Reject_phone", "Phone number isn't 7 to 20 digits"],
     expires: ["sl_Reject_expires", "Last day isn't a date (YYYY-MM-DD)"],
     date: ["sl_Reject_date", "Date isn't a date (YYYY-MM-DD)"]
   };
@@ -1523,7 +1523,7 @@ ${x.script}\r
           )
         )
       ),
-      el("div", { class: "sl-note sl-narrow", text: t("sl_ImportHint", "A CSV file in UTF-8 with a header row: lookup_id and status_code are needed; note, expires (the last day) and date (as YYYY-MM-DD), pin (4 to 8 digits) and phone are optional. An empty pin keeps the record's PIN; an empty phone removes it. Keep PINs as text in your spreadsheet, so leading zeros stay. Export CSV on the Records tab writes the same format, without PINs. Nothing changes until you check the file and press Import.") }),
+      el("div", { class: "sl-note sl-narrow", text: t("sl_ImportHint", "A UTF-8 CSV file with a header row. Needed: lookup_id, status_code. Optional: note, date and expires (YYYY-MM-DD; expires is the last day), pin (4 to 8 digits), phone. An empty pin keeps the PIN; an empty phone removes it. Keep PINs as text in your spreadsheet so leading zeros stay. Nothing changes until you check the file and press Import.") }),
       el(
         "div",
         { class: "ui form sl-import-form" },
@@ -1616,7 +1616,7 @@ ${x.script}\r
     hit_person: ["sl_Outcome_hit_person", "Heard their status, then put through"],
     operator: ["sl_Outcome_operator", "Pressed 0 for a person"],
     too_many: ["sl_Outcome_too_many", "Too many tries, put through"],
-    rate_limited: ["sl_Outcome_rate_limited", "Stopped by guessing protection"],
+    rate_limited: ["sl_Outcome_rate_limited", "Too many misses, put through"],
     fault: ["sl_Outcome_fault", "Lookup failed, put through"],
     abandoned: ["sl_Outcome_abandoned", "Hung up in the lookup"],
     inactive: ["sl_Outcome_inactive", "Line was switched off"]
@@ -1682,13 +1682,13 @@ ${x.script}\r
   function changeLine(cur, prev) {
     if (prev === null || cur === null || prev === void 0) return null;
     const diff = cur - prev;
-    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangeVs", "{diff} on the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${count(Math.abs(diff))}` });
+    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangeVs", "{diff} from the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${count(Math.abs(diff))}` });
     return el("div", { class: "sl-change", text });
   }
   function changePoints(cur, prev) {
     if (cur === null || prev === null) return null;
     const diff = cur - prev;
-    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangePoints", "{diff} points on the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${Math.abs(diff)}` });
+    const text = diff === 0 ? t("sl_NoChange", "Same as the previous period") : sub(t("sl_ChangePoints", "{diff} points from the previous period"), { diff: `${diff > 0 ? "+" : "\u2212"}${Math.abs(diff)}` });
     return el("div", { class: "sl-change", text });
   }
   function renderActivity(a) {
@@ -1715,7 +1715,7 @@ ${x.script}\r
         tile(t("sl_TileDeflected", "Needed No Person"), rate === null ? null : `${rate}%`, plural("sl_CallsCount", tot.deflected, { one: "{n} call", other: "{n} calls" }), prev.calls ? changePoints(rate, prevRate) : null),
         tile(t("sl_TileToPerson", "Put Through to a Person"), count(tot.to_person), sub(t("sl_OfCalls", "{pct}% of calls"), { pct: pct(tot.to_person, tot.calls) }), prev.calls ? changeLine(tot.to_person, prev.to_person) : null)
       ),
-      el("div", { class: "sl-note", text: t("sl_DeflectedNote", '"Needed no person" means the caller heard a status and the call ended without reaching anyone. Callers who hang up during the greeting count as calls, not as statuses heard.') }),
+      el("div", { class: "sl-note", text: t("sl_DeflectedNote", '"Needed No Person": the caller heard a status and the call ended without reaching anyone. Callers who hang up before hearing a status still count as calls.') }),
       el("div", { class: "sl-section-head" }, el("h4", { class: "ui header", text: t("sl_ByDay", "Calls by Day") })),
       el("div", { class: "sl-chart", id: "sl-chart-trend" }),
       el(

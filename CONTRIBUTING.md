@@ -93,7 +93,7 @@ The core creates the module's tables from the model annotations in `Models/` on 
 | `Models/` | Tables in the module's database; the settings and statuses declare relations, so the PBX refuses to delete a sound file or destination the line uses |
 | `Setup/PbxExtensionSetup.php` | Installer: sidebar entry, the number, the PIN key's rights, and on uninstall the AGI links and the number |
 | `App/Controllers/`, `App/Views/` | The module page and its JSON actions. Reads are AJAX GETs (the CSV export is a plain GET, so the browser downloads it); writes must be AJAX POSTs with a Bearer token |
-| `public/assets/` | Page script and styles; `js/vendor/` holds the ECharts bundle and its licence |
+| `public/assets/` | Page script and styles; `js/vendor/` holds the ECharts bundle and its license |
 | `Messages/` | Interface text (English and Russian) |
 | `build/`, `package.json` | Builds the browser assets with esbuild, and the release zip (`build/package.sh`) |
 | `tests/Unit/` | PHPUnit tests that run without a PBX |

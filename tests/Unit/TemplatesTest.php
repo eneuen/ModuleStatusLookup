@@ -49,7 +49,7 @@ final class TemplatesTest extends TestCase
         self::assertSame(['repair', 4, 6], [$settings['template'], $settings['id_min_length'], $settings['id_max_length']]);
         $cannot = $db->query("SELECT * FROM m_StatusLookupStatuses WHERE code = 'CANNOT_REPAIR'")->fetch(PDO::FETCH_ASSOC);
         self::assertSame(['transfer', '201', null], [$cannot['after_action'], $cannot['transfer_number'], $cannot['prompt_id']]);
-        self::assertStringContainsString('Please speak to us', $cannot['script']);
+        self::assertStringContainsString('We need to talk to you', $cannot['script']);
 
         // A second template adds only what's missing and leaves the ID lengths alone.
         $result = $templates->apply($db, 'auto', 'en-en', '');
