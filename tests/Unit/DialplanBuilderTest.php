@@ -144,11 +144,19 @@ final class DialplanBuilderTest extends TestCase
         self::assertLessThan(strpos($conf, '[status-lookup-end]'), strpos($conf, 'exten => T,1'));
     }
 
+    public function testCallersOverTheLimitGoToTheOperatorAndLeaveTheGroupWhenPutThrough(): void
+    {
+        $conf = self::builder(['max_concurrent' => 3])->contexts();
+        self::assertStringContainsString("Set(GROUP(statuslookup)=line)\n\tsame => n,GotoIf(\$[\${GROUP_COUNT(line@statuslookup)} > 3]?busy)", $conf);
+        self::assertStringContainsString("Set(GROUP(statuslookup)=)\n\tsame => n,Goto(internal,\${SL_TARGET},1)", $conf);
+        self::assertStringNotContainsString('GROUP(', self::builder(['max_concurrent' => 0])->contexts());
+    }
+
     public function testDestinationsDefaultToTheOperator(): void
     {
         $conf = self::builder()->contexts();
-        // Operator, too many tries, rate limited, fault, and the fallback for a missing destination.
-        self::assertSame(5, substr_count($conf, 'Set(SL_TARGET=2000)'));
+        // Operator, too many tries, rate limited, line full, fault, and the fallback for a missing destination.
+        self::assertSame(6, substr_count($conf, 'Set(SL_TARGET=2000)'));
 
         $conf = self::builder(['too_many_tries_number' => '2001', 'fault_number' => '2002'])->contexts();
         self::assertStringContainsString("too_many),Set(SL_OUTCOME=too_many)\n\tsame => n,Set(SL_TARGET=2001)", $conf);
@@ -222,7 +230,7 @@ final class DialplanBuilderTest extends TestCase
         self::assertDoesNotMatchRegularExpression('/Set\(SL_PIN=|Read\(SL_PIN/', $conf);
         // Wrong PINs are counted per ID by the script, not by the dialplan.
         self::assertStringNotContainsString('SL_PINID', $conf);
-        self::assertStringContainsString('Set(SL_PINFAILS=)', $conf);
+        self::assertStringNotContainsString('SL_PINFAILS', $conf);
         self::assertStringContainsString('same => n(counted),GotoIf($["${SL_RESULT}" == "no_pin" | "${SL_RESULT}" == "no_phone" | "${SL_RESULT}" == "pin_locked"]?operator)', $conf);
     }
 

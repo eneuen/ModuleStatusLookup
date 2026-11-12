@@ -6,6 +6,7 @@ declare(strict_types=1);
 
 namespace Modules\ModuleStatusLookup\Lib\RestAPI\Records;
 
+use MikoPBX\Core\System\SystemMessages;
 use MikoPBX\PBXCoreREST\Lib\PBXApiResult;
 use Modules\ModuleStatusLookup\Lib\EditorException;
 use Modules\ModuleStatusLookup\Lib\RecordsApi;
@@ -35,6 +36,8 @@ final class Processor
                     if (!$api->delete(Api::id($data))) {
                         throw new EditorException('not_found');
                     }
+                    // Deleting is the one write a records key can do that leaves no record behind: say who did it.
+                    SystemMessages::sysLogMsg(self::class, "$by deleted a record through the API", LOG_WARNING);
                     return ['deleted' => true];
                 case 'import':
                     return self::import($api, $data, 'update', $by);
@@ -59,7 +62,7 @@ final class Processor
     public static function import(RecordsApi $api, array $data, string $mode, string $by): array
     {
         unset($data['id']);
-        $unknown = array_diff(array_keys($data), ['csv', 'dryRun']);
+        $unknown = array_diff(array_keys($data), $mode === 'replace' ? ['csv', 'dryRun', 'allowLargeDelete'] : ['csv', 'dryRun']);
         if ($unknown !== []) {
             throw new EditorException('unknown_fields', ['fields' => implode(',', array_map('strval', $unknown))]);
         }
@@ -68,6 +71,15 @@ final class Processor
             throw new EditorException('field_type', ['field' => 'dryRun']);
         }
 
-        return $api->import($data['csv'] ?? null, $mode, $dryRun, $by, time());
+        $allowLarge = filter_var($data['allowLargeDelete'] ?? false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($allowLarge === null) {
+            throw new EditorException('field_type', ['field' => 'allowLargeDelete']);
+        }
+        $result = $api->import($data['csv'] ?? null, $mode, $dryRun, $by, time(), $allowLarge);
+        if (!$dryRun && $mode === 'replace' && $result['deleted'] > 0) {
+            SystemMessages::sysLogMsg(self::class, "$by replaced all records through the API, deleting {$result['deleted']}", LOG_WARNING);
+        }
+
+        return $result;
     }
 }

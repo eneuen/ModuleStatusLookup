@@ -108,6 +108,21 @@ final class RecordsApiTest extends TestCase
         self::assertTrue($this->api->get('10445')['has_pin']);
     }
 
+    public function testReplaceAllRefusesToDeleteMostRecordsUnlessAllowed(): void
+    {
+        for ($i = 0; $i < 12; $i++) {
+            $this->api->put((string)(20000 + $i), ['status_code' => 'READY'], 'x', self::NOW);
+        }
+        $cutShort = "lookup_id,status_code\r\n20000,READY\r\n";
+        try {
+            $this->api->import($cutShort, 'replace', false, 'x', self::NOW);
+            self::fail('a file cut short deleted most records');
+        } catch (EditorException $e) {
+            self::assertSame(['replace_large', 11, 12], [$e->getMessage(), $e->params['deleted'], $e->params['total']]);
+        }
+        self::assertSame(11, $this->api->import($cutShort, 'replace', false, 'x', self::NOW, true)['deleted']);
+    }
+
     public function testImportRefusesNoCsv(): void
     {
         $this->expectException(EditorException::class);

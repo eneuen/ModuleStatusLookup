@@ -107,6 +107,7 @@ const FIELDS = {
   max_tries: ['sl_MaxTries', 'Tries'],
   miss_limit_caller: ['sl_MissLimitCaller', 'Per Caller Number'],
   miss_limit_total: ['sl_MissLimitTotal', 'All Callers Together'],
+  max_concurrent: ['sl_MaxConcurrent', 'Callers in the Lookup at Once'],
   log_retention_days: ['sl_LogRetention', 'Keep the Call Log For'],
   operator_number: ['sl_Operator', 'Operator'],
   too_many_tries_number: ['sl_TooManyTries', 'After the Last Try'],
@@ -553,7 +554,9 @@ function renderCallFlow(data) {
     section(t('sl_SectionGuessing', 'Guessing Protection'), t('sl_SectionGuessingHint', 'IDs that aren\'t found, wrong PINs and calls from the wrong number count as misses. When one caller number, or all callers together, reach their limit within an hour, the next ID they type goes straight to the operator. 0 turns a limit off.'),
       el('div', { class: 'two fields' },
         field(fieldName('miss_limit_caller'), numberInput('sl-miss_limit_caller', s.miss_limit_caller, 0, 1000)),
-        field(fieldName('miss_limit_total'), numberInput('sl-miss_limit_total', s.miss_limit_total, 0, 100000)))),
+        field(fieldName('miss_limit_total'), numberInput('sl-miss_limit_total', s.miss_limit_total, 0, 100000))),
+      field(fieldName('max_concurrent'), numberInput('sl-max_concurrent', s.max_concurrent, 0, 500),
+        t('sl_MaxConcurrentHint', 'More callers than this in the lookup at once are put through to the operator. 0 turns the limit off.'))),
     section(t('sl_SectionPrivacy', 'Privacy'), t('sl_SectionPrivacyHint', 'The call log holds callers\' numbers and the IDs they typed. Old calls are deleted every night; the daily totals on the Activity tab stay, without numbers.'),
       field(fieldName('log_retention_days'), el('div', { class: 'ui right labeled input sl-days-input' },
         numberInput('sl-log_retention_days', s.log_retention_days, 0, 3650), el('div', { class: 'ui basic label', text: t('sl_Days', 'days') })),
@@ -672,7 +675,7 @@ function readCallFlow() {
   const values = {};
   PROMPTS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
   NUMBER_FIELDS.forEach(([f]) => { values[f] = $id(`sl-${f}`).value; });
-  ['operator_number', 'too_many_tries_number', 'fault_number', 'miss_limit_caller', 'miss_limit_total', 'log_retention_days'].forEach((f) => { values[f] = $id(`sl-${f}`).value; });
+  ['operator_number', 'too_many_tries_number', 'fault_number', 'miss_limit_caller', 'miss_limit_total', 'max_concurrent', 'log_retention_days'].forEach((f) => { values[f] = $id(`sl-${f}`).value; });
   values.purge_expired = $id('sl-purge_expired').checked;
   return values;
 }
@@ -1476,6 +1479,7 @@ const OUTCOMES = {
   operator: ['sl_Outcome_operator', 'Pressed 0 for a person'],
   too_many: ['sl_Outcome_too_many', 'Too many tries, put through'],
   rate_limited: ['sl_Outcome_rate_limited', 'Too many misses, put through'],
+  busy: ['sl_Outcome_busy', 'Line full, put through'],
   fault: ['sl_Outcome_fault', 'Lookup failed, put through'],
   abandoned: ['sl_Outcome_abandoned', 'Hung up in the lookup'],
   inactive: ['sl_Outcome_inactive', 'Line was switched off'],

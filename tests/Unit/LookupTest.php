@@ -250,10 +250,14 @@ final class LookupTest extends TestCase
         $log->execute([self::NOW - 2000, 3, '40001']);
         $log->execute([self::NOW - 1000, 3, '99999']);      // another ID
         self::assertSame('need_pin', $this->lookup()->find('40001', '555', 0, self::NOW)['SL_RESULT']);
-        // With this call's own wrong PINs: 6 + 3 = 9, then 10.
-        self::assertSame('pin_failed', $this->lookup()->find('40001', '555', 0, self::NOW, '0000', 3)['SL_RESULT']);
-        self::assertSame('pin_locked', $this->lookup()->find('40001', '555', 0, self::NOW, '4821', 4)['SL_RESULT']);
-        self::assertSame('pin_locked', $this->lookup()->find('40001', '666', 0, self::NOW, null, 4)['SL_RESULT']);
+        // Each wrong PIN is recorded the moment it is typed, so calls running at the same time count together: 6 + 3 = 9, then 10.
+        for ($i = 0; $i < 3; $i++) {
+            Lookup::recordPinFail($this->db, '40001', self::NOW);
+        }
+        self::assertSame('pin_failed', $this->lookup()->find('40001', '555', 0, self::NOW, '0000')['SL_RESULT']);
+        Lookup::recordPinFail($this->db, '40001', self::NOW);
+        self::assertSame('pin_locked', $this->lookup()->find('40001', '555', 0, self::NOW, '4821')['SL_RESULT']);
+        self::assertSame('pin_locked', $this->lookup()->find('40001', '666', 0, self::NOW)['SL_RESULT']);
     }
 
     public function testSamePhone(): void

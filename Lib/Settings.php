@@ -41,6 +41,7 @@ final class Settings
         'fault_number'          => '',
         'miss_limit_caller'     => 10,
         'miss_limit_total'      => 200,
+        'max_concurrent'        => 10,
         'log_retention_days'    => 0,
         'purge_expired'         => '0',
     ];

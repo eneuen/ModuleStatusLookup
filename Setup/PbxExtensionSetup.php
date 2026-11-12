@@ -49,11 +49,14 @@ class PbxExtensionSetup extends PbxExtensionSetupBase
     public function fixFilesRights(): bool
     {
         $result = parent::fixFilesRights();
+        $key = StatusLookupConf::pinKeyFile();
         try {
-            Pin::fromFile(StatusLookupConf::pinKeyFile());
+            Pin::fromFile($key);
         } catch (Throwable $e) {
             SystemMessages::sysLogMsg(__CLASS__, 'PIN key: ' . $e->getMessage(), LOG_WARNING);
         }
+        // Nothing else runs against the module during the install, so root can tighten the mode here (also for a damaged key).
+        Pin::lockDown($key);
 
         return $result;
     }

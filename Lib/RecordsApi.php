@@ -33,6 +33,9 @@ final class RecordsApi
     /** The core limits a JSON body to 4 MiB; the CSV travels inside one. */
     public const int MAX_IMPORT_BYTES = 4 * 1024 * 1024;
 
+    /** Replace All through the API may delete up to this many records without allowLargeDelete, whatever the share. */
+    public const int LARGE_DELETE_MIN = 10;
+
     public function __construct(private readonly PDO $db, private readonly DateTimeZone $timezone, private readonly ?Pin $pin = null)
     {
     }
@@ -139,7 +142,7 @@ final class RecordsApi
      *
      * @throws EditorException
      */
-    public function import(mixed $csv, string $mode, bool $dryRun, string $by, int $now): array
+    public function import(mixed $csv, string $mode, bool $dryRun, string $by, int $now, bool $allowLargeDelete = false): array
     {
         // A CSV starting with "http" would arrive damaged (see put()); a real one starts with its header row.
         if (is_string($csv) && stripos($csv, 'http') === 0) {
@@ -154,7 +157,20 @@ final class RecordsApi
         $statuses = $this->db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN);
         $importer = new Importer($csv, Lookup::idLengths(Settings::load($this->db)), array_map('strval', $statuses), $this->pin);
 
-        return ($dryRun ? $importer->preview($this->db, $mode) : $importer->apply($this->db, $mode, $by, 'API', $now, 'api')) + ['dry_run' => $dryRun];
+        if ($dryRun) {
+            return $importer->preview($this->db, $mode) + ['dry_run' => true];
+        }
+        // Replace All from software deletes what isn't in the file: a file cut short would wipe most records. Deleting
+        // more than half of them needs allowLargeDelete (the page asks the admin instead).
+        if ($mode === 'replace' && !$allowLargeDelete) {
+            $preview = $importer->preview($this->db, $mode);
+            $total = (int)$this->db->query('SELECT COUNT(*) FROM m_StatusLookupRecords')->fetchColumn();
+            if ($preview['deleted'] > self::LARGE_DELETE_MIN && $preview['deleted'] * 2 > $total) {
+                throw new EditorException('replace_large', ['deleted' => $preview['deleted'], 'total' => $total]);
+            }
+        }
+
+        return $importer->apply($this->db, $mode, $by, 'API', $now, 'api') + ['dry_run' => false];
     }
 
     /**

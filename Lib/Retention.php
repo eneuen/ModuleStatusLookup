@@ -106,6 +106,7 @@ final class Retention
             throw new EditorException('forget_id');
         }
         $deleted = ['records' => 0, 'calls' => 0];
+        $this->overwriteDeleted();
         Databases::immediate($this->db, function () use ($id, &$deleted): void {
             $stmt = $this->db->prepare('DELETE FROM m_StatusLookupRecords WHERE lookup_id = ?');
             $stmt->execute([$id]);
@@ -118,6 +119,12 @@ final class Retention
         });
 
         return $deleted;
+    }
+
+    /** Forgotten data is overwritten in the database file, not just unlinked from it (SQLite otherwise leaves it in free pages). */
+    private function overwriteDeleted(): void
+    {
+        $this->db->exec('PRAGMA secure_delete = ON');
     }
 
     /**
@@ -159,6 +166,7 @@ final class Retention
         }
         $tail = substr($phone, -Lookup::PHONE_DIGITS);
         $deleted = ['calls' => 0, 'records' => 0];
+        $this->overwriteDeleted();
         Databases::immediate($this->db, function () use ($phone, $tail, &$deleted): void {
             // Narrowed by the last digits in SQL, then matched exactly as the lookup does.
             foreach (['m_StatusLookupCallLog' => 'caller', 'm_StatusLookupRecords' => 'phone'] as $table => $column) {

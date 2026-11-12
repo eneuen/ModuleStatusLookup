@@ -95,11 +95,10 @@ final class Lookup
      * @param string $caller The caller's number, digits only; '' when withheld.
      * @param int $missesThisCall Failed tries earlier in this call, not yet in the log.
      * @param string|null $typedPin The PIN the caller typed, on the second lookup of a status that asks for one.
-     * @param int $pinFailsThisCall Wrong PINs for this same ID earlier in this call, not yet in the log.
      *
      * @return array<string, string> Channel variable => value; every SL_ variable is set.
      */
-    public function find(string $input, string $caller, int $missesThisCall, int $now, ?string $typedPin = null, int $pinFailsThisCall = 0): array
+    public function find(string $input, string $caller, int $missesThisCall, int $now, ?string $typedPin = null): array
     {
         $vars = ['SL_RESULT' => '', 'SL_ID' => '', 'SL_STATUS' => '', 'SL_PROMPT' => '', 'SL_EXTRA' => 'none',
             'SL_DATE' => '', 'SL_ACTION' => '', 'SL_TRANSFER' => ''];
@@ -145,7 +144,7 @@ final class Lookup
             if ($stored === '' || $this->pin === null) {
                 return ['SL_RESULT' => 'no_pin'] + $vars;
             }
-            if ($this->pinFails($input, $now) + $pinFailsThisCall >= self::PIN_FAILS_LIMIT) {
+            if ($this->pinFails($input, $now) >= self::PIN_FAILS_LIMIT) {
                 return ['SL_RESULT' => 'pin_locked'] + $vars;
             }
             if ($typedPin === null) {
@@ -251,7 +250,17 @@ final class Lookup
         return false;
     }
 
-    /** Wrong PINs typed for this ID in the last PIN_FAILS_WINDOW, by any caller (test calls too: they are real guesses). */
+    /**
+     * Records one wrong PIN for an ID the moment it is typed, so calls running
+     * at the same time see it at once (counting at hang-up let parallel calls
+     * each guess their full tries). Test calls count too: they are real guesses.
+     */
+    public static function recordPinFail(PDO $db, string $id, int $now): void
+    {
+        $db->prepare('INSERT INTO m_StatusLookupPinFails (pin_id, started_at, fails) VALUES (?, ?, 1)')->execute([$id, $now]);
+    }
+
+    /** Wrong PINs typed for this ID in the last PIN_FAILS_WINDOW, by any caller. */
     private function pinFails(string $id, int $now): int
     {
         $stmt = $this->db->prepare('SELECT COALESCE(SUM(fails), 0) FROM m_StatusLookupPinFails WHERE pin_id = ? AND started_at >= ?');

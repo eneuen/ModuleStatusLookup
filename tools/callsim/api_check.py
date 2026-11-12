@@ -161,6 +161,9 @@ def main():
         c.that(status == 200 and "totals" in body.get("data", {}) and "notFound" not in body["data"], f"localhost reads the totals, without the IDs callers typed ({status})")
         status, body = local("PUT", "/records/770006", {"status_code": "APICHECK"})
         c.that(status == 201 and body["data"]["updated_by"] == "PBX", f"localhost writes, as PBX ({status})")
+        status, body = local("POST", "/records-replace:import", {"csv": "lookup_id,status_code\r\n770001,APICHECK\r\n"})
+        c.that(status == 400 and body.get("data", {}).get("error") == "replace_large",
+               f"replace all refuses to delete most records without allowLargeDelete ({status} {body.get('data', {}).get('params')})")
         status, body = local("POST", "/records-replace:import", {"csv": "lookup_id,status_code\r\n770001,APICHECK\r\n", "dryRun": True})
         c.that(status == 200 and body["data"]["deleted"] >= 4 and body["data"]["dry_run"] is True, f"replace all dry run counts the deletions ({body.get('data', {}).get('deleted')})")
 

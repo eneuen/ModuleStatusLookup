@@ -9,9 +9,10 @@ namespace Modules\ModuleStatusLookup\Models;
 use MikoPBX\Modules\Models\ModulesModelsBase;
 
 /**
- * Wrong PINs typed for one ID in one call. The lookup stops asking for an
- * ID's PIN after too many in a day, whoever calls (Lookup::PIN_FAILS_LIMIT).
- * Written by the worker with the call's log row, and deleted with it.
+ * Wrong PINs typed for an ID, one row each, written by the PIN script the
+ * moment one is typed. The lookup stops asking for an ID's PIN after too
+ * many in a day, whoever calls (Lookup::PIN_FAILS_LIMIT). Deleted by the
+ * call log's retention and by Forget.
  *
  * @Indexes(
  *     [name='pin_id_started', columns=['pin_id', 'started_at'], type=''],
@@ -35,7 +36,7 @@ class StatusLookupPinFails extends ModulesModelsBase
     public $pin_id;
 
     /**
-     * When the call started (epoch seconds), as in the call log.
+     * When the wrong PIN was typed (epoch seconds).
      *
      * @Column(type="integer", nullable=false)
      */

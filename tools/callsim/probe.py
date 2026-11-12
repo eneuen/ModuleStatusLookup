@@ -66,7 +66,7 @@ RECORDS = [
 SETTINGS = {
     "active": "1", "operator_number": OPERATOR, "too_many_tries_number": TOO_MANY, "fault_number": FAULT,
     "id_min_length": 4, "id_max_length": 10, "digit_timeout": 3, "max_tries": 3,
-    "miss_limit_caller": 0, "miss_limit_total": 0,
+    "miss_limit_caller": 0, "miss_limit_total": 0, "max_concurrent": 10,
 }
 
 

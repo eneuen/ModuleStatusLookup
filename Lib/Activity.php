@@ -33,7 +33,7 @@ final class Activity
     public const int TOP_IDS = 10;
 
     /** Outcomes in the order they are listed when their counts are equal. */
-    public const array OUTCOME_ORDER = ['hit', 'hit_person', 'operator', 'too_many', 'rate_limited', 'fault', 'abandoned', 'inactive'];
+    public const array OUTCOME_ORDER = ['hit', 'hit_person', 'operator', 'too_many', 'rate_limited', 'busy', 'fault', 'abandoned', 'inactive'];
 
     public function __construct(private readonly PDO $db, private readonly DateTimeZone $timezone)
     {

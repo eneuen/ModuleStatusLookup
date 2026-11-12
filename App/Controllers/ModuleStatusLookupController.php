@@ -531,7 +531,12 @@ class ModuleStatusLookupController extends BaseController
     private function write(callable $change, bool $reload = false): void
     {
         $auth = $this->request->getHeader('Authorization');
-        if (!AccessPolicy::isAllowedWrite($this->request->isPost(), $this->request->isAjax(), $auth === '' ? null : $auth)) {
+        // The token itself must be valid and an administrator's: the page reached this action through the session
+        // cookie, which a write must not rely on alone.
+        $payload = str_starts_with($auth, 'Bearer ') ? $this->di->getShared(JwtProvider::SERVICE_NAME)->validate(substr($auth, 7)) : null;
+        if (!AccessPolicy::isAllowedWrite($this->request->isPost(), $this->request->isAjax(), $auth === '' ? null : $auth)
+            || !is_array($payload) || !AccessPolicy::isAllowedRole(is_string($payload['role'] ?? null) ? $payload['role'] : null)
+            || !is_string($payload['userId'] ?? null) || $payload['userId'] === '') {
             $this->respond(403, ['success' => false, 'message' => 'bad_request']);
             return;
         }

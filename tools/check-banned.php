@@ -48,9 +48,15 @@ foreach (PHP_DIRS as $dir) {
                 }
             } elseif (is_array($token) && $token[0] === T_EVAL) {
                 $found[] = [$file, $token[2], 'eval'];
-            } elseif (is_array($token) && $token[0] === T_STRING && in_array(strtolower($token[1]), BANNED_FUNCTIONS, true)
+            } elseif (is_array($token) && in_array($token[0], [T_STRING, T_NAME_FULLY_QUALIFIED], true)
+                && in_array(strtolower(ltrim($token[1], '\\')), BANNED_FUNCTIONS, true)
                 && nextIs($tokens, $i, '(') && !isMethodOrDeclaration($tokens, $i)) {
+                // \exec() is one T_NAME_FULLY_QUALIFIED token in PHP 8, not a T_STRING.
                 $found[] = [$file, $token[2], $token[1] . '()'];
+            } elseif (is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING
+                && in_array(strtolower(trim($token[1], '\'"')), BANNED_FUNCTIONS, true)) {
+                // A banned function named as a string, to be called through a variable or array_map().
+                $found[] = [$file, $token[2], 'string naming ' . trim($token[1], '\'"')];
             }
         }
     }

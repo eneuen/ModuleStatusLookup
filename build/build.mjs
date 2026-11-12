@@ -18,10 +18,12 @@ await build({
   format: 'iife',
   target: ['es2019'],
   legalComments: 'none',          // the full licence texts ship next to the bundle
-  banner: { js: `/*! Apache ECharts ${version} | Apache-2.0 | see LICENSE and NOTICE in this folder */` },
+  banner: { js: `/*! Apache ECharts ${version} | Apache-2.0 | with zrender (BSD-3-Clause) | see LICENSE, NOTICE and LICENSE-zrender in this folder */` },
 });
 copyFileSync('node_modules/echarts/LICENSE', `${vendor}/LICENSE`);
 copyFileSync('node_modules/echarts/NOTICE', `${vendor}/NOTICE`);
+// zrender, which ECharts is built on, is in the bundle too (BSD-3-Clause): its notice ships with it.
+copyFileSync('node_modules/zrender/LICENSE', `${vendor}/LICENSE-zrender`);
 
 await build({
   entryPoints: ['public/assets/js/src/status-lookup.js'],

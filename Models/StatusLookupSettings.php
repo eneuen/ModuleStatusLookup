@@ -130,6 +130,15 @@ class StatusLookupSettings extends ModulesModelsBase
     public $miss_limit_total = 200;
 
     /**
+     * Callers in the lookup at the same time; more go straight to the
+     * operator. Bounds what many parallel calls can guess before any of
+     * them is logged. 0 is no limit.
+     *
+     * @Column(type="integer", nullable=true, default="10")
+     */
+    public $max_concurrent = 10;
+
+    /**
      * Days to keep callers' numbers in the call log; 0 follows the PBX's call
      * history retention.
      *

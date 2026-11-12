@@ -22,7 +22,7 @@ final class Handoff
 {
     public const int VERSION = 1;
 
-    public const array OUTCOMES = ['hit', 'operator', 'too_many', 'rate_limited', 'fault', 'inactive', 'abandoned'];
+    public const array OUTCOMES = ['hit', 'operator', 'too_many', 'rate_limited', 'busy', 'fault', 'inactive', 'abandoned'];
 
     /** Channel variable => record field, with the pattern the value must match. */
     private const array FIELDS = [
@@ -32,17 +32,13 @@ final class Handoff
         'SL_CALLER'  => ['caller', '/^[0-9]{0,32}\z/'],
         'SL_TRIES'   => ['tries', '/^[0-9]{1,2}\z/'],
         'SL_MISSES'  => ['misses', '/^[0-9]{1,2}\z/'],
-        'SL_OUTCOME' => ['outcome', '/^(hit|operator|too_many|rate_limited|fault|inactive|abandoned)\z/'],
+        'SL_OUTCOME' => ['outcome', '/^(hit|operator|too_many|rate_limited|busy|fault|inactive|abandoned)\z/'],
         'SL_RESULT'  => ['last_result', '/^(|hit|invalid|not_found|expired|rate_limited|fault|need_pin|no_pin|no_phone|pin_failed|pin_locked|callerid_failed)\z/'],
         'SL_ID'      => ['id_entered', '/^[0-9]{0,20}\z/'],
         'SL_STATUS'  => ['status_code', '/^[A-Z0-9_]{0,32}\z/'],
         'SL_TARGET'  => ['target', '/^[0-9]{0,8}\z/'],
         'SL_TEST'    => ['is_test', '/^1?\z/'],
-        'SL_PINFAILS' => ['pin_fails', PinFails::PATTERN],
     ];
-
-    /** Fields added after version 1 went out: a record queued by an older line lacks them, and they count as empty. */
-    private const array LATER_FIELDS = ['pin_fails'];
 
     private const string LINKEDID_PATTERN = '/^[A-Za-z0-9._-]{1,80}\z/';
 
@@ -118,7 +114,7 @@ final class Handoff
         }
         $out['linkedid'] = $record['linkedid'];
         foreach (self::FIELDS as [$field, $pattern]) {
-            $value = $record[$field] ?? (in_array($field, self::LATER_FIELDS, true) ? '' : null);
+            $value = $record[$field] ?? null;
             if (!is_string($value) || preg_match($pattern, $value) !== 1) {
                 throw new InvalidArgumentException("Invalid $field");
             }

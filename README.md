@@ -89,10 +89,10 @@ The line behaves like the PBX's own IVR menus: it has its own row in the call hi
 ## Privacy and protection
 
 - **PIN:** a status can ask for the record's PIN (4 to 8 digits) before it is told; the pharmacy template does. PINs are stored only as keyed hashes and can't be shown or exported.
-- **Own phone only:** a status can be told only to a caller calling from the number saved on the record.
-- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. Once a caller number has 10 misses in an hour, or all callers together have 200 (both by default; you can change them), the next ID they type goes straight to the operator instead of being looked up. After 10 wrong PINs for one ID in a day, from any callers, test calls included, that ID's PIN is no longer asked for: callers with that ID are put through to the operator instead.
+- **Own phone only:** a status can be told only to a caller calling from the number saved on the record. Caller ID can be forged by whoever controls the calling line, so this isn't proof of who is calling: for anything sensitive, ask for a PIN.
+- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers sound the same ("not found") and count as misses. Once a caller number has 10 misses in an hour, or all callers together have 200 (both by default), the next ID they type goes straight to the operator. Each wrong PIN counts against its ID the moment it's typed; after 10 in a day, from any callers, test calls included, that ID's PIN is no longer asked for and callers with that ID are put through to the operator. At most 10 callers (by default) are in the lookup at once; more are put through to the operator, which bounds what many calls at once can try. IDs that are found aren't limited, so if your IDs are easy to guess (such as order numbers counted up one by one), anyone can hear the statuses that need no PIN: use a PIN, or IDs that are hard to guess. Being asked for a PIN, or being put through because the record has no PIN or phone, tells a caller the ID exists. An attacker who keeps making misses can push every caller to the operator for a while; that is the intended fallback.
 - **Call log:** callers' numbers and the IDs they typed are kept for as long as the PBX keeps its call history (forever, if the PBX's setting is under 30 days), or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes one ID's record, the logged calls for it and its wrong-PIN counts, or every logged call from one caller number and that number on records.
-- MikoPBX's own Asterisk log records every key pressed on any call, IDs and PINs included; that is a PBX-wide setting outside the module.
+- MikoPBX's own Asterisk log records every key pressed on any call, IDs and PINs included, and the module's own lines there name the ID and status of each lookup; that log is the PBX's, outside the module. Uninstalling with kept settings leaves a copy of the module's data, call log included, in the PBX's module backup folder until the next install.
 
 See [SECURITY.md](SECURITY.md) for what the module exposes and how to report a problem.
 
@@ -107,7 +107,7 @@ Shop, POS or ticketing software can keep the records up to date through the PBX'
 | PUT | `records/{lookup_id}` | Creates the record (201) or changes it (200). Fields left out keep their value; an empty string clears one (except `pin`, which only `remove_pin` clears). |
 | DELETE | `records/{lookup_id}` | Deletes one record; 404 when there is none. |
 | POST | `records:import` | Imports a CSV file (add and update): `{"csv": "...", "dryRun": true}`. With `dryRun`, nothing changes and the answer says what would. |
-| POST | `records-replace:import` | The same, but the file becomes the full list: records not in it are deleted. |
+| POST | `records-replace:import` | The same, but the file becomes the full list: records not in it are deleted. A file that would delete more than half the records (and more than 10) is refused unless it says `"allowLargeDelete": true`. |
 | GET | `statuses` | The status codes records can have. |
 | GET | `stats?from=YYYY-MM-DD&to=YYYY-MM-DD` | The Activity tab's totals for a period of up to 366 days, in PBX time. |
 
@@ -119,12 +119,12 @@ curl -X PUT "https://pbx.example.com/pbxcore/api/v3/module-status-lookup/records
   -d '{"status_code": "READY", "expires_on": "2026-12-31"}'
 ```
 
-**Access.** Create an API key on the PBX's API keys page and allow it the paths it needs, for example `/api/v3/module-status-lookup/records` with write access. Replacing all records is a path of its own (`/api/v3/module-status-lookup/records-replace`), so a key that updates records can't delete them all unless it is given that too. A key without the right access is refused with 401. Administrators' logins work as well, and, as everywhere in the PBX's REST API, scripts running on the PBX itself (localhost) need no key. A record changed through the API shows "API" and the key's description as who changed it.
+**Access.** Create an API key on the PBX's API keys page and allow it the paths it needs, for example `/api/v3/module-status-lookup/records` with write access. Replacing all records is a path of its own (`/api/v3/module-status-lookup/records-replace`), so a key that updates records can't replace them all in one request unless it is given that too; it can still delete records one at a time, and every deletion through the API is noted in the PBX's system log with the key's description. A key without the right access is refused with 401. Administrators' logins work as well, and, as everywhere in the PBX's REST API, scripts running on the PBX itself (localhost) need no key. A record changed through the API shows "API" and the key's description as who changed it.
 
 A refusal answers 400 with an error code in `data.error` and its details in `data.params`:
 
 - records: `lookup_id` (the ID isn't within the call flow's lengths), `record_status` (unknown status code), `status_required`, `unknown_fields`, `field_type` (a field that isn't text, or a `dryRun` that isn't true or false), `pin`, `phone`, `note`, `note_http`, `date`, `bad_request` (an unknown `status` filter);
-- imports: `file_empty`, `file_size`, `file_encoding`, `file_header`, `file_rows`, `replace_empty` (Replace All with no usable row), `statuses_changed` (a status was renamed or deleted during the import; send it again);
+- imports: `file_empty`, `file_size`, `file_encoding`, `file_header`, `file_rows`, `replace_empty` (Replace All with no usable row), `replace_large` (Replace All that would delete most records; `data.params` says how many), `statuses_changed` (a status was renamed or deleted during the import; send it again);
 - stats: `range_dates`, `range_long`.
 
 A login whose role isn't administrator gets 403 (`forbidden`); an ID of more than 20 digits in the path gets 404.

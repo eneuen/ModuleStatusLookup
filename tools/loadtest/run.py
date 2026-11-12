@@ -98,6 +98,7 @@ def main():
     args = parser.parse_args()
 
     probe = Probe()          # the probe's call flow and statuses, and a dialplan reload
+    probe.configure(max_concurrent=0)   # all the calls at once; the limit itself is checked at the end
     size = write_csv(args.rows)
     print(f"CSV of {args.rows:,} rows ({size / 1048576:.1f} MB as JSON); warming up with one import")
     seconds, body = import_once()
@@ -164,6 +165,20 @@ def main():
             stamps.setdefault(chan.group(1), {})[event.group(1)] = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
     waits = [s["lookup"] - s["input"] for s in stamps.values() if "lookup" in s and "input" in s]
     check(waits and max(waits) <= 1, f"each lookup answered within a second of the ID (longest: {max(waits or [0]):.0f} s)")
+    # The limit on callers in the lookup at once: with 5, the 3 calls over it are put through as "line full".
+    probe.configure(max_concurrent=5)
+    since_id = probe.last_log_id()
+    add_helper()
+    originate(probe.number, 8)
+    deadline = time.time() + 90
+    capped = []
+    while time.time() < deadline:
+        capped = rows(f"SELECT outcome FROM m_StatusLookupCallLog WHERE id > {since_id}")
+        if len(capped) >= 8:
+            break
+        time.sleep(2)
+    outcomes = sorted(r["outcome"] for r in capped)
+    check(outcomes == ["busy"] * 3 + ["hit"] * 5, f"with a limit of 5, 8 calls at once: 5 heard their status, 3 put through as line full ({outcomes})")
     clean_up(probe)
     print("\nLoad test passed." if ok else "\nLoad test failed.")
     sys.exit(0 if ok else 1)

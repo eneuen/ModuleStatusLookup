@@ -27,6 +27,7 @@ final class CallFlowEditor
         'max_tries'         => [1, 9],
         'miss_limit_caller' => [0, 1000],
         'miss_limit_total'  => [0, 100000],
+        'max_concurrent'    => [0, 500],
         'log_retention_days' => [0, Retention::MAX_DAYS],
     ];
 
