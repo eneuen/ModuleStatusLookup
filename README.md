@@ -6,7 +6,7 @@ A MikoPBX extension module that answers "Is it ready yet?" calls without a perso
 
 It suits any business whose customers call to ask where something stands: device and IT repair, auto workshops, pharmacies, shops and online stores.
 
-> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md).
+> Download the latest version from the [Releases page](https://github.com/eneuen/ModuleStatusLookup/releases). What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ![The Records tab: each ID with its status, date, last day, note and last change, with search, filters and CSV export](docs/screenshots/records.png)
 
@@ -33,6 +33,16 @@ The screenshots show a test PBX with simulated calls; the IDs, notes and numbers
     <td width="50%" valign="top">
       <a href="docs/screenshots/call-flow.png"><img src="docs/screenshots/call-flow.png" alt="The Call Flow tab: the line's state and test call, what sends callers to it, and its prompts"></a>
       <br><b>Call Flow.</b> The line's number, what callers hear, how they type, where they go, and privacy settings.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/status-dialog.png"><img src="docs/screenshots/status-dialog.png" alt="The status dialog: its code and name, the recorded sentence, what is said after it, what happens next, and who hears it"></a>
+      <br><b>A status.</b> Its recorded sentence, what is said after it, what happens next, and whether a PIN or the caller's own phone is needed.
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/record-dialog.png"><img src="docs/screenshots/record-dialog.png" alt="The record dialog: the ID, status, date, last day, note, phone number and PIN"></a>
+      <br><b>A record.</b> The ID and its status, with an optional date, last day, note for staff, phone number and PIN.
     </td>
   </tr>
 </table>
@@ -147,4 +157,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the checks, how a call run
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE). The built-in prompts in `Sounds/` are dedicated to the public domain under CC0 1.0 (see [Sounds/LICENSE](Sounds/LICENSE)), so you can reuse them anywhere. The bundled Apache ECharts is Apache-2.0; its license and notice, and zrender's license, are in `public/assets/js/vendor/`.
