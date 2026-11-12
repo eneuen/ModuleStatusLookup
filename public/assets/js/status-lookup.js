@@ -1143,8 +1143,9 @@ ${x.script}\r
       el(
         "td",
         { class: "sl-actions-cell" },
-        el("button", { class: "ui basic button", type: "button", onclick: () => openRecord(r) }, t("sl_Edit", "Edit")),
-        iconButton("trash alternate outline", t("sl_DeleteRecord", "Delete Record"), () => deleteRecords([r.id], r.lookup_id))
+        // One button: the records table has the most columns and must fit a laptop. Delete is in the record's dialog
+        // (and Delete Selected for several).
+        el("button", { class: "ui compact basic button", type: "button", onclick: () => openRecord(r) }, t("sl_Edit", "Edit"))
       )
     );
   }
@@ -1291,6 +1292,12 @@ ${x.script}\r
     const save = () => saveRecord(r ? r.id : null);
     $id("sl-record-save").onclick = save;
     $id("sl-record-cancel").onclick = () => $("#sl-record-modal").modal("hide");
+    const deleteButton = $id("sl-record-delete");
+    deleteButton.classList.toggle("sl-hidden", !r);
+    deleteButton.onclick = () => {
+      $("#sl-record-modal").modal("hide");
+      deleteRecords([r.id], r.lookup_id);
+    };
     form.onsubmit = (e) => {
       e.preventDefault();
       save();

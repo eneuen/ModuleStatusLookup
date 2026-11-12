@@ -50,6 +50,7 @@
         <div class="header" id="sl-record-title"></div>
         <div class="content"><form class="ui form" id="sl-record-form"></form></div>
         <div class="actions">
+            <button class="ui basic red left floated button" type="button" id="sl-record-delete">{{ t._('sl_DeleteRecord')|e }}</button>
             <button class="ui button" type="button" id="sl-record-cancel">{{ t._('sl_Cancel')|e }}</button>
             <button class="ui primary button" type="button" id="sl-record-save">{{ t._('sl_SaveRecord')|e }}</button>
         </div>
