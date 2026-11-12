@@ -94,6 +94,7 @@
     file_empty: ["sl_Err_file_empty", "The file is empty."],
     file_header: ["sl_Err_file_header", "The first row must name the columns, with at least lookup_id and status_code."],
     file_rows: ["sl_Err_file_rows", "The file has more than {max} rows."],
+    statuses_changed: ["sl_Err_statuses_changed", "The statuses changed while the file was being checked. Check the file again."],
     replace_empty: ["sl_Err_replace_empty", "No row in the file can be imported, so Replace All would delete every record. Nothing was changed."],
     lookup_id: ["sl_Err_lookup_id", "Enter the ID as {min} to {max} digits, as callers type it (the lengths are set on the Call Flow tab)."],
     lookup_id_taken: ["sl_Err_lookup_id_taken", "There is already a record with the ID {id}."],
@@ -520,7 +521,7 @@
   }
   function forgetPart() {
     const row = (id, labelText, placeholder, action, title, text, done) => {
-      const input = el("input", { type: "text", id, inputmode: "numeric", maxlength: "24", placeholder, autocomplete: "off" });
+      const input = el("input", { type: "text", id, inputmode: "numeric", maxlength: "40", placeholder, autocomplete: "off" });
       const button = el("button", { class: "ui basic red button", type: "button", onclick: () => {
         const value = input.value.trim();
         if (!value) {
@@ -1087,7 +1088,7 @@ ${x.script}\r
     });
     const withDate = rows.some((r) => r.status_date);
     const filtered = records.query.search || records.query.status || records.query.stale !== "0" || records.query.expired;
-    const table = rows.length ? el(
+    const table = rows.length ? el("div", { class: "sl-table-scroll" }, el(
       "table",
       { class: "ui very basic table sl-table" },
       el("thead", {}, el(
@@ -1103,7 +1104,7 @@ ${x.script}\r
         el("th", {})
       )),
       el("tbody", {}, rows.map((r) => recordRow(r, d.today, withDate)))
-    ) : el("div", { class: "ui message" }, el("p", { text: filtered ? t("sl_NoMatches", "No records match these filters.") : t("sl_NoRecords", "No records yet. Add them one by one, or import a CSV file from your shop software or spreadsheet.") }));
+    )) : el("div", { class: "ui message" }, el("p", { text: filtered ? t("sl_NoMatches", "No records match these filters.") : t("sl_NoRecords", "No records yet. Add them one by one, or import a CSV file from your shop software or spreadsheet.") }));
     const pager = d && d.pages > 1 ? el(
       "div",
       { class: "sl-pager" },

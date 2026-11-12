@@ -141,6 +141,7 @@ return [
     'sl_Err_status_gone' => 'This status no longer exists. Reload the page.',
     'sl_Err_status_in_use' => 'Records still have this status. Choose a status to move them to.',
     'sl_Err_status_prompt' => 'Choose the sound file with the sentence the caller hears.',
+    'sl_Err_statuses_changed' => 'The statuses changed while the file was being checked. Check the file again.',
     'sl_Err_template' => 'This template can\'t be used. Reload the page.',
     'sl_Err_test_extension' => 'Choose an extension from the list.',
     'sl_Err_too_many_statuses' => 'Up to {max} statuses.',

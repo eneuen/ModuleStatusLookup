@@ -220,7 +220,9 @@ final class DialplanBuilderTest extends TestCase
         self::assertStringContainsString("same => n(pin_ok),Set(SL_MISSES=\$[\${SL_MISSES} - 1])", $conf);
         // No variable ever holds the typed PIN: only the script sees it.
         self::assertDoesNotMatchRegularExpression('/Set\(SL_PIN=|Read\(SL_PIN/', $conf);
-        self::assertStringContainsString('ExecIf($["${SL_RESULT}" == "pin_failed"]?Set(SL_PINID=${SL_ID}))', $conf);
+        // Wrong PINs are counted per ID by the script, not by the dialplan.
+        self::assertStringNotContainsString('SL_PINID', $conf);
+        self::assertStringContainsString('Set(SL_PINFAILS=)', $conf);
         self::assertStringContainsString('same => n(counted),GotoIf($["${SL_RESULT}" == "no_pin" | "${SL_RESULT}" == "no_phone" | "${SL_RESULT}" == "pin_locked"]?operator)', $conf);
     }
 

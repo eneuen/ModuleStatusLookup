@@ -77,6 +77,7 @@ final class Retention
                 $stmt = $this->db->prepare('DELETE FROM m_StatusLookupCallLog WHERE started_at < ?');
                 $stmt->execute([$cutoff]);
                 $deleted['calls'] = $stmt->rowCount();
+                $this->db->prepare('DELETE FROM m_StatusLookupPinFails WHERE started_at < ?')->execute([$cutoff]);
             }
             if ($purgeExpired) {
                 // The last day itself still counts; only well-formed dates, as a malformed one may be a typo staff will fix.
@@ -112,6 +113,7 @@ final class Retention
             $stmt = $this->db->prepare('DELETE FROM m_StatusLookupCallLog WHERE id_entered = ?');
             $stmt->execute([$id]);
             $deleted['calls'] = $stmt->rowCount();
+            $this->db->prepare('DELETE FROM m_StatusLookupPinFails WHERE pin_id = ?')->execute([$id]);
             $this->forgetInImports($id);
         });
 

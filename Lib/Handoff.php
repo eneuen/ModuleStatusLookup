@@ -38,12 +38,11 @@ final class Handoff
         'SL_STATUS'  => ['status_code', '/^[A-Z0-9_]{0,32}\z/'],
         'SL_TARGET'  => ['target', '/^[0-9]{0,8}\z/'],
         'SL_TEST'    => ['is_test', '/^1?\z/'],
-        'SL_PINFAILS' => ['pin_fails', '/^[0-9]{0,2}\z/'],
-        'SL_PINID'   => ['pin_id', '/^[0-9]{0,20}\z/'],
+        'SL_PINFAILS' => ['pin_fails', PinFails::PATTERN],
     ];
 
     /** Fields added after version 1 went out: a record queued by an older line lacks them, and they count as empty. */
-    private const array LATER_FIELDS = ['pin_fails', 'pin_id'];
+    private const array LATER_FIELDS = ['pin_fails'];
 
     private const string LINKEDID_PATTERN = '/^[A-Za-z0-9._-]{1,80}\z/';
 

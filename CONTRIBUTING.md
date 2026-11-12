@@ -46,7 +46,7 @@ Code that needs the MikoPBX core (the hooks, the worker, the AGI scripts, the co
 The module adds its line through MikoPBX's module dialplan hooks; it doesn't edit custom dialplan files.
 
 - **The number:** on install the module registers its internal number (2300, or the first free one up to 2399) as a module extension, so it appears in the destination pickers of incoming routes and IVR menus. `[internal]` sends the number to the module's `[status-lookup]` context; nothing else reaches it.
-- **Collecting digits:** the dialplan plays the prompts and collects the ID with `Read()`, so a key pressed during a prompt counts. PHP runs only for a moment per try: `agi-bin/status_lookup.php` looks the ID up (one indexed read, read only) and sets channel variables the dialplan acts on. PINs are collected by the same script with `GET DATA`, so they never sit in a channel variable.
+- **Collecting digits:** the dialplan plays the prompts and collects the ID with `Read()`, so a key pressed during a prompt counts. PHP runs only for a moment per try: `agi-bin/status_lookup.php` looks the ID up (a few indexed reads, read only) and sets channel variables the dialplan acts on. PINs are collected by the same script with `GET DATA`, so they never sit in a channel variable.
 - **Limits:** tries per call, the miss limits per caller number and for all callers together (counted from the call log over the last hour), wrong PINs per ID (over the last day), and a 2-minute `TIMEOUT(absolute)` that is cleared before the caller is sent on.
 - **Always a person:** 0 at any prompt that listens for keys, the last try, a record the caller may not hear, and any fault lead to a destination the admin chose. A destination that no longer exists falls back to the fault destination, then to an apology.
 - **Logging:** a hangup handler (or the line itself, just before it sends the caller on) runs `agi-bin/status_lookup_end.php` once per visit. It checks every value against a fixed pattern (`Lib/Handoff.php`) and passes the record to the module's worker over the PBX's Beanstalk queue. The worker checks it again and is the only writer of the call log and the daily counts. It also places the page's test calls and runs the nightly clean-up.
@@ -82,17 +82,17 @@ The core creates the module's tables from the model annotations in `Models/` on 
 | `Lib/CallFlowEditor.php`, `Lib/StatusEditor.php`, `Lib/RecordEditor.php` | The page's editors: every change validated |
 | `Lib/Importer.php` | CSV import: checking, preview, applying, history |
 | `Lib/Templates.php`, `Setup/templates/` | Business templates, one JSON file each |
-| `Lib/Pin.php` | PIN hashing and the key file |
+| `Lib/Pin.php`, `Lib/PinFails.php` | PIN hashing and the key file; a call's wrong PINs per ID |
 | `Lib/Retention.php` | Call-log retention, purging expired records, and "forget" |
 | `Lib/Activity.php` | The Activity tab's numbers and the call log |
 | `Lib/RecordsApi.php`, `Lib/RestAPI/` | The REST API's logic, and its routes and processors |
-| `Lib/BuiltInPrompts.php`, `Sounds/` | The module's own prompts |
+| `Lib/BuiltInPrompts.php`, `Sounds/` | The module's own prompts (`Sounds/` comes with the recordings) |
 | `Lib/PbxOptions.php` | What the page picks from in the PBX: sound files, destinations, extensions |
 | `Lib/AccessPolicy.php` | Who may use the page, and what a write request must carry |
 | `Lib/Databases.php`, `Lib/Settings.php` | Database connections and transactions; the module's settings row |
 | `Models/` | Tables in the module's database; the settings and statuses declare relations, so the PBX refuses to delete a sound file or destination the line uses |
 | `Setup/PbxExtensionSetup.php` | Installer: sidebar entry, the number, the PIN key's rights, and on uninstall the AGI links and the number |
-| `App/Controllers/`, `App/Views/` | The module page and its JSON actions. Reads are AJAX GETs; writes must be AJAX POSTs with a Bearer token |
+| `App/Controllers/`, `App/Views/` | The module page and its JSON actions. Reads are AJAX GETs (the CSV export is a plain GET, so the browser downloads it); writes must be AJAX POSTs with a Bearer token |
 | `public/assets/` | Page script and styles; `js/vendor/` holds the ECharts bundle and its licence |
 | `Messages/` | Interface text (English and Russian) |
 | `build/`, `package.json` | Builds the browser assets with esbuild, and the release zip (`build/package.sh`) |
@@ -108,7 +108,7 @@ The core creates the module's tables from the model annotations in `Models/` on 
 
 This section is for maintainers.
 
-What ships is everything except the development files listed as `export-ignore` in `.gitattributes`: tests, tools, build scripts, script sources, dependency manifests, CI files and the README's screenshots. That one list applies to every archive git makes, including the release zip and GitHub's "Source code" downloads. Those downloads are for developers only, because `module.json` keeps its `%ModuleVersion%` placeholder until a release is packaged. To work on the module, clone the repository.
+What ships is everything except the development files listed as `export-ignore` in `.gitattributes`: tests, tools, build scripts, script sources, dependency manifests, the PHPUnit and git settings, CI files, this guide and the README's screenshots. That one list applies to every archive git makes, including the release zip and GitHub's "Source code" downloads. Those downloads are for developers only, because `module.json` keeps its `%ModuleVersion%` placeholder until a release is packaged. To work on the module, clone the repository.
 
 To release a version:
 

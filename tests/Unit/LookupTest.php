@@ -227,6 +227,16 @@ final class LookupTest extends TestCase
         self::assertSame('callerid_failed', $this->lookup()->find('40003', '', 0, self::NOW)['SL_RESULT']);
     }
 
+    public function testTheMissCountedForBeingAskedDoesntRefuseTheRightPin(): void
+    {
+        // A limit of 1: being asked for the PIN counted this call's one miss; the right PIN is still heard.
+        $lookup = $this->lookup(['miss_limit_caller' => 1]);
+        self::assertSame('need_pin', $lookup->find('40001', '5551234', 0, self::NOW)['SL_RESULT']);
+        self::assertSame('hit', $lookup->find('40001', '5551234', 1, self::NOW, '4821')['SL_RESULT']);
+        // A real miss earlier in the call still counts.
+        self::assertSame('rate_limited', $lookup->find('40001', '5551234', 2, self::NOW, '4821')['SL_RESULT']);
+    }
+
     public function testRecordWithoutAPhoneIsntToldButPutThrough(): void
     {
         self::assertSame('no_phone', $this->lookup()->find('40004', '0301234567', 0, self::NOW)['SL_RESULT']);
@@ -234,12 +244,11 @@ final class LookupTest extends TestCase
 
     public function testTooManyWrongPinsForOneIdFromAnyCaller(): void
     {
-        $log = $this->db->prepare("INSERT INTO m_StatusLookupCallLog (linkedid, started_at, ended_at, caller, outcome, is_test, pin_fails, pin_id)
-            VALUES ('x', ?, ?, ?, 'abandoned', '0', ?, ?)");
-        $log->execute([self::NOW - 90000, self::NOW, '111', 9, '40001']);     // more than a day ago: doesn't count
-        $log->execute([self::NOW - 3000, self::NOW, '222', 3, '40001']);
-        $log->execute([self::NOW - 2000, self::NOW, '333', 3, '40001']);
-        $log->execute([self::NOW - 1000, self::NOW, '444', 3, '99999']);      // another ID
+        $log = $this->db->prepare('INSERT INTO m_StatusLookupPinFails (started_at, fails, pin_id) VALUES (?, ?, ?)');
+        $log->execute([self::NOW - 90000, 9, '40001']);     // more than a day ago: doesn't count
+        $log->execute([self::NOW - 3000, 3, '40001']);
+        $log->execute([self::NOW - 2000, 3, '40001']);
+        $log->execute([self::NOW - 1000, 3, '99999']);      // another ID
         self::assertSame('need_pin', $this->lookup()->find('40001', '555', 0, self::NOW)['SL_RESULT']);
         // With this call's own wrong PINs: 6 + 3 = 9, then 10.
         self::assertSame('pin_failed', $this->lookup()->find('40001', '555', 0, self::NOW, '0000', 3)['SL_RESULT']);

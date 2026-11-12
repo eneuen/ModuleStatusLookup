@@ -42,13 +42,17 @@ final class CallLogStore
             }
             $toPerson = $record['target'] !== '' ? '1' : '0';
             $this->db->prepare('INSERT INTO m_StatusLookupCallLog (linkedid, started_at, ended_at, caller, id_entered, tries, misses,
-                    outcome, last_result, status_code, target, is_test, pin_fails, pin_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                    outcome, last_result, status_code, target, is_test) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 ->execute([
                     $record['linkedid'], (int)$record['started_at'], (int)$record['ended_at'], $record['caller'],
                     $record['id_entered'], (int)$record['tries'], (int)$record['misses'], $record['outcome'],
                     $record['last_result'], $record['status_code'], $record['target'], $record['is_test'] === '1' ? '1' : '0',
-                    (int)$record['pin_fails'], $record['pin_id'],
                 ]);
+            // Wrong PINs per ID, for the PIN lock; test calls too, as they are real guesses.
+            $pinFails = $this->db->prepare('INSERT INTO m_StatusLookupPinFails (pin_id, started_at, fails) VALUES (?, ?, ?)');
+            foreach (PinFails::parse($record['pin_fails']) as $id => $fails) {
+                $pinFails->execute([(string)$id, (int)$record['started_at'], $fails]);
+            }
             if ($record['is_test'] !== '1') {
                 $day = (new DateTimeImmutable('@' . (int)$record['started_at']))->setTimezone($timezone)->format('Y-m-d');
                 $this->db->prepare('INSERT INTO m_StatusLookupDailyCounts (day, outcome, to_person, calls, misses) VALUES (?, ?, ?, 1, ?)

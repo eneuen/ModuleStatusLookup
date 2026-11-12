@@ -239,4 +239,4 @@
 .sl-page .sl-forget > .ui.header { margin: 0; }
 .sl-page .sl-changed-cell { min-width: 9em; max-width: 16em; }
 /* A wide table scrolls sideways inside the page instead of pushing its buttons out of view. */
-.sl-page #sl-rec-body { overflow-x: auto; }
+.sl-page .sl-table-scroll { overflow-x: auto; }

@@ -20,6 +20,13 @@ final class Databases
 {
     private const int BUSY_TIMEOUT_MS = 5000;
 
+    /** Bytes the write-ahead log is cut back to after a checkpoint. */
+    private const int WAL_SIZE_LIMIT = 4 * 1024 * 1024;
+
+    /** Filesystems where SQLite's shared-memory WAL index isn't safe; the same list as the core's. */
+    private const array NETWORK_FILESYSTEMS = ['nfs', 'nfs4', 'cifs', 'smb', 'smbfs', 'smb2', 'smb3', 'sshfs', 'davfs', 'glusterfs',
+        'ceph', 'lustre', 'gpfs'];
+
     public static function openReadOnly(string $file): PDO
     {
         if (!is_file($file)) {
@@ -49,10 +56,38 @@ final class Databases
         $pdo->exec('PRAGMA foreign_keys = OFF');
         // Write-ahead log: a lookup during a calls' busy hour never waits for an import or the worker to finish
         // writing (with the default rollback journal, a large write locks readers out until it commits). The
-        // mode stays with the file; asking again is a no-op.
-        $pdo->exec('PRAGMA journal_mode = WAL');
+        // mode stays with the file; asking again is a no-op. Not on network storage, where WAL isn't safe (as
+        // the core decides for its own databases). The log is cut back after a large import.
+        if (self::walSafe($file)) {
+            $pdo->exec('PRAGMA journal_mode = WAL');
+            $pdo->exec('PRAGMA journal_size_limit = ' . self::WAL_SIZE_LIMIT);
+        }
 
         return $pdo;
+    }
+
+    /**
+     * Whether the file is on a local filesystem, by the longest mount point
+     * containing it in $mounts (/proc/mounts). Unknown counts as local.
+     */
+    public static function walSafe(string $file, ?string $mounts = null): bool
+    {
+        $mounts ??= (string)@file_get_contents('/proc/mounts');
+        $best = '';
+        $type = '';
+        foreach (explode("\n", $mounts) as $line) {
+            $parts = preg_split('/\s+/', trim($line));
+            if (!is_array($parts) || count($parts) < 3 || $parts[1] === '') {
+                continue;
+            }
+            $prefix = $parts[1] === '/' ? '/' : $parts[1] . '/';
+            if (str_starts_with($file, $prefix) && strlen($parts[1]) > strlen($best)) {
+                $best = $parts[1];
+                $type = strtolower($parts[2]);
+            }
+        }
+
+        return !in_array($type, self::NETWORK_FILESYSTEMS, true);
     }
 
     /**

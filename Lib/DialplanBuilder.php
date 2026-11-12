@@ -192,8 +192,7 @@ final class DialplanBuilder
             'Set(SL_RESULT=)',
             'Set(SL_ID=)',
             'Set(SL_STATUS=)',
-            'Set(SL_PINFAILS=0)',
-            'Set(SL_PINID=)',
+            'Set(SL_PINFAILS=)',
             'Set(CHANNEL(hangup_handler_push)=' . self::CONTEXT_END . ',s,1)',
             'Verbose(3,SLPROBE event=entry active=' . ($this->active ? '1' : '0') . ' ' . self::COMMON . ')',
         ];
@@ -278,7 +277,7 @@ final class DialplanBuilder
             "Verbose(3,SLPROBE event=lookup result=\${SL_RESULT} id=\${SL_ID} status=\${SL_STATUS} $c)",
             // A status that asks for the record's PIN: the script asks for it itself (Read() would put it in a
             // channel variable) and looks up again with it. Being asked shows the ID exists, so it counts as a
-            // miss until the PIN is right; a wrong PIN is also counted against the ID, whoever calls.
+            // miss until the PIN is right; the script also counts a wrong PIN against the ID (SL_PINFAILS), whoever calls.
             'GotoIf($["${SL_RESULT}" != "need_pin"]?checked)',
             'Set(SL_MISSES=$[${SL_MISSES} + 1])',
             'Set(SL_RESULT=fault)',
@@ -287,8 +286,6 @@ final class DialplanBuilder
             "Verbose(3,SLPROBE event=pin result=\${SL_RESULT} id=\${SL_ID} status=\${SL_STATUS} $c)",
             'GotoIf($["${SL_PIN0}" == "1"]?operator)',
             'GotoIf($["${SL_RESULT}" == "hit"]?pin_ok)',
-            'ExecIf($["${SL_RESULT}" == "pin_failed"]?Set(SL_PINFAILS=$[${SL_PINFAILS} + 1]))',
-            'ExecIf($["${SL_RESULT}" == "pin_failed"]?Set(SL_PINID=${SL_ID}))',
             'GotoIf($["${SL_RESULT}" == "rate_limited"]?rate_limited)',
             'GotoIf($["${SL_RESULT}" == "fault"]?fault)',
             'Goto(counted)',

@@ -31,6 +31,7 @@ use MikoPBX\Core\System\SystemMessages;
 use Modules\ModuleStatusLookup\Lib\Databases;
 use Modules\ModuleStatusLookup\Lib\Lookup;
 use Modules\ModuleStatusLookup\Lib\Pin;
+use Modules\ModuleStatusLookup\Lib\PinFails;
 use Modules\ModuleStatusLookup\Lib\Settings;
 use Modules\ModuleStatusLookup\Lib\StatusLookupConf;
 
@@ -87,14 +88,18 @@ try {
     }
     $lookup = new Lookup($db, $settings, StatusLookupConf::timezone(), [StatusLookupConf::class, 'promptPath'], $pin);
     $input = (string)$agi->get_variable('SL_IN', true);
+    $pinFails = (string)$agi->get_variable('SL_PINFAILS', true);
     $vars = $lookup->find(
         $input,
         (string)$agi->get_variable('SL_CALLER', true),
         (int)$agi->get_variable('SL_MISSES', true),
         time(),
         $typedPin,
-        (string)$agi->get_variable('SL_PINID', true) === $input ? (int)$agi->get_variable('SL_PINFAILS', true) : 0,
+        PinFails::parse($pinFails)[$input] ?? 0,
     );
+    if ($mode === 'pin' && $vars['SL_RESULT'] === 'pin_failed') {
+        $vars['SL_PINFAILS'] = PinFails::add($pinFails, $input);
+    }
 } catch (Throwable $e) {
     SystemMessages::sysLogMsg('StatusLookup', 'Lookup failed: ' . $e->getMessage(), LOG_ERR);
     $vars = ['SL_RESULT' => 'fault', 'SL_ID' => '', 'SL_STATUS' => '', 'SL_PROMPT' => '', 'SL_EXTRA' => 'none',

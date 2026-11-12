@@ -8,6 +8,7 @@ namespace Modules\ModuleStatusLookup\Tests\Unit;
 
 use Modules\ModuleStatusLookup\Lib\EditorException;
 use Modules\ModuleStatusLookup\Lib\Importer;
+use Modules\ModuleStatusLookup\Lib\RecordEditor;
 use Modules\ModuleStatusLookup\Lib\Pin;
 use Modules\ModuleStatusLookup\Tests\Unit\Support\TestDatabases;
 use PDO;
@@ -25,6 +26,28 @@ final class ImporterTest extends TestCase
         $this->db = TestDatabases::module();
         $this->db->exec("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, expires_on, status_date, updated_at, source)
             VALUES ('10445', 'READY', '=Toyota', '', '', 1, 'form'), ('20001', 'PARTS', '', '', '', 1, 'form'), ('30001', 'READY', '', '', '', 1, 'form')");
+        $this->db->exec("INSERT INTO m_StatusLookupStatuses (code, name) VALUES ('READY', 'Ready'), ('PARTS', 'Parts'), ('SHIPPED', 'Shipped')");
+    }
+
+    public function testAStatusRemovedAfterTheFileWasCheckedStopsTheImport(): void
+    {
+        $importer = self::importer("lookup_id,status_code\r\n50001,SHIPPED\r\n");
+        $this->db->exec("DELETE FROM m_StatusLookupStatuses WHERE code = 'SHIPPED'");
+        try {
+            $importer->apply($this->db, 'update', 'admin', 'a.csv', 1);
+            self::fail('imported with a status that no longer exists');
+        } catch (EditorException $e) {
+            self::assertSame('statuses_changed', $e->getMessage());
+        }
+        self::assertSame(['10445', '20001', '30001'], $this->ids());
+    }
+
+    public function testAnExportedLongFormulaNoteImportsBack(): void
+    {
+        $note = '=' . str_repeat('x', 199);
+        $csv = RecordEditor::csvLine(['lookup_id', 'status_code', 'note']) . RecordEditor::csvLine(['10445', 'READY', $note]);
+        self::assertSame(['added' => 0, 'updated' => 1, 'rejected' => 0], array_intersect_key(self::importer($csv)->preview($this->db, 'update'),
+            ['added' => 1, 'updated' => 1, 'rejected' => 1]));
     }
 
     private static function importer(string $csv): Importer

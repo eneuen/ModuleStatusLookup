@@ -83,6 +83,17 @@ final class RetentionTest extends TestCase
         self::assertSame(['20001', '99999'], $this->ids());
     }
 
+    public function testForgetIdAndRetentionCoverWrongPins(): void
+    {
+        $this->db->exec('INSERT INTO m_StatusLookupPinFails (pin_id, started_at, fails) VALUES (\'10445\', 1, 3), (\'10446\', '
+            . (new DateTimeImmutable('2026-11-11 09:00', $this->tz))->getTimestamp() . ', 2)');
+        $retention = new Retention($this->db, $this->tz);
+        $retention->run((new DateTimeImmutable('2026-11-12 03:00', $this->tz))->getTimestamp(), 10, false);
+        self::assertSame(['10446'], $this->db->query('SELECT pin_id FROM m_StatusLookupPinFails')->fetchAll(PDO::FETCH_COLUMN));
+        $retention->forgetId('10446');
+        self::assertSame(0, (int)$this->db->query('SELECT COUNT(*) FROM m_StatusLookupPinFails')->fetchColumn());
+    }
+
     public function testForgetIdCleansImportReports(): void
     {
         $this->db->exec("INSERT INTO m_StatusLookupImports (imported_at, imported_by, file_name, mode, added, updated, unchanged, deleted, rejected, report)

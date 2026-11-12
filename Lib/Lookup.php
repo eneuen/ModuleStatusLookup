@@ -104,7 +104,8 @@ final class Lookup
         $vars = ['SL_RESULT' => '', 'SL_ID' => '', 'SL_STATUS' => '', 'SL_PROMPT' => '', 'SL_EXTRA' => 'none',
             'SL_DATE' => '', 'SL_ACTION' => '', 'SL_TRANSFER' => ''];
 
-        if ($this->rateLimited(self::digits($caller), $missesThisCall, $now)) {
+        // Being asked for the PIN already counted a miss (until the PIN is right); it mustn't refuse the right PIN.
+        if ($this->rateLimited(self::digits($caller), $typedPin === null ? $missesThisCall : max(0, $missesThisCall - 1), $now)) {
             return ['SL_RESULT' => 'rate_limited'] + $vars;
         }
         [$min, $max] = self::idLengths($this->settings);
@@ -253,7 +254,7 @@ final class Lookup
     /** Wrong PINs typed for this ID in the last PIN_FAILS_WINDOW, by any caller (test calls too: they are real guesses). */
     private function pinFails(string $id, int $now): int
     {
-        $stmt = $this->db->prepare('SELECT COALESCE(SUM(pin_fails), 0) FROM m_StatusLookupCallLog WHERE pin_id = ? AND started_at >= ?');
+        $stmt = $this->db->prepare('SELECT COALESCE(SUM(fails), 0) FROM m_StatusLookupPinFails WHERE pin_id = ? AND started_at >= ?');
         $stmt->execute([$id, $now - self::PIN_FAILS_WINDOW]);
 
         return (int)$stmt->fetchColumn();

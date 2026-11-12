@@ -122,7 +122,7 @@ class Probe:
         statements = [f"UPDATE m_StatusLookupSettings SET {assignments} WHERE id = 1",
                       "DELETE FROM m_StatusLookupStatuses", "DELETE FROM m_StatusLookupRecords",
                       # Wrong PINs from earlier runs would lock the probe's PIN record.
-                      "UPDATE m_StatusLookupCallLog SET pin_fails = 0, pin_id = ''"]
+                      "DELETE FROM m_StatusLookupPinFails"]
         for code, prompt, extra, action, transfer, pin, own in STATUSES:
             statements.append("INSERT INTO m_StatusLookupStatuses (code, name, prompt_id, spoken_extra, after_action, transfer_number, "
                               f"requires_pin, requires_callerid) VALUES ({quote(code)}, {quote(code)}, {prompt}, {quote(extra)}, {quote(action)}, "
@@ -566,7 +566,9 @@ def pin_wrong(p, c):
     caller.keys("10445#")
     c.that(wait_event(since, "lookup", timeout=15, result="hit", id="10445") is not None, "the next try works")
     caller.hangup(); pause(2)
-    check_row(c, p, log_id, outcome="hit", status_code="READY", tries=2, misses=1, pin_fails=1, pin_id="40001")
+    check_row(c, p, log_id, outcome="hit", status_code="READY", tries=2, misses=1)
+    fails = rows("SELECT pin_id, fails FROM m_StatusLookupPinFails ORDER BY id DESC LIMIT 1")
+    c.that(fails == [{"pin_id": "40001", "fails": 1}], f"one wrong PIN counted against 40001 ({fails})")
 
 
 @scenario("A status that asks for a PIN, on a record without one: the caller is put through to the operator.")
@@ -611,13 +613,12 @@ def zero_at_pin(p, c):
     caller.keys("0#")
     c.that(rang(op, 15), "the operator rings")
     caller.hangup(); pause(2)
-    check_row(c, p, log_id, outcome="operator", target=OPERATOR, misses=1, pin_fails=0)
+    check_row(c, p, log_id, outcome="operator", target=OPERATOR, misses=1)
 
 
 @scenario("An ID with 10 wrong PINs in the last day, from other callers: its PIN isn't asked for, the operator rings.")
 def pin_locked(p, c):
-    sql("INSERT INTO m_StatusLookupCallLog (linkedid, started_at, ended_at, caller, outcome, is_test, pin_fails, pin_id) "
-        "VALUES ('probe-lock', strftime('%s','now') - 600, strftime('%s','now') - 590, '999', 'abandoned', '0', 10, '40001')")
+    sql("INSERT INTO m_StatusLookupPinFails (pin_id, started_at, fails) VALUES ('40001', strftime('%s','now') - 600, 10)")
     try:
         since, log_id = log_size(), p.last_log_id()
         caller, op = call_in(p), Line(OPERATOR)
@@ -625,11 +626,11 @@ def pin_locked(p, c):
         c.that(wait_event(since, "lookup", timeout=15, result="pin_locked") is not None, "lookup result: pin_locked")
         c.that(rang(op, 15), "the operator rings")
         caller.hangup(); pause(2)
-        found = rows(f"SELECT * FROM m_StatusLookupCallLog WHERE id > {log_id} AND linkedid != 'probe-lock' ORDER BY id")
+        found = rows(f"SELECT * FROM m_StatusLookupCallLog WHERE id > {log_id} ORDER BY id")
         c.that(len(found) == 1 and found[0]["outcome"] == "operator" and found[0]["last_result"] == "pin_locked",
                f"logged as pin_locked, to the operator ({found[:1]})")
     finally:
-        sql("DELETE FROM m_StatusLookupCallLog WHERE linkedid = 'probe-lock' OR pin_id = '40001'")
+        sql("DELETE FROM m_StatusLookupPinFails WHERE pin_id = '40001'")
 
 
 @scenario("A status only for the record's own phone, on a record without a phone: the operator rings.")
@@ -691,8 +692,18 @@ def hostile_caller_id(p, c):
 @scenario("Values that would break out of the dialplan (a newline, a bracket, ${...}) are refused through the page, "
           "and the generated dialplan doesn't change.")
 def dialplan_injection_refused(p, c):
-    import page_client
     before = docker("exec", PBX_CONTAINER, "md5sum", "/etc/asterisk/extensions.conf", capture=True).split()[0]
+    try:
+        _injection_attempts(p, c)
+    finally:
+        sql("DELETE FROM m_StatusLookupStatuses WHERE code = 'INJECT'")
+        p.configure()        # the probe's own settings, whatever was stored
+    after = docker("exec", PBX_CONTAINER, "md5sum", "/etc/asterisk/extensions.conf", capture=True).split()[0]
+    c.that(before == after, "extensions.conf is unchanged")
+
+
+def _injection_attempts(p, c):
+    import page_client
     bad = ["301)\nexten => s,1,System(id)", "301${SHELL(id)}", "3 01", "301,1"]
     for value in bad:
         res = page_client.post(p.pbx, "saveCallFlow", {"settings": json.dumps({"operator_number": value})})
@@ -708,10 +719,6 @@ def dialplan_injection_refused(p, c):
         else:
             c.that(not res.get("success"), f"status {field} {value!r} refused ({res.get('message')})")
         sql("DELETE FROM m_StatusLookupStatuses WHERE code = 'INJECT'")
-    reload_dialplan()
-    time.sleep(5)
-    after = docker("exec", PBX_CONTAINER, "md5sum", "/etc/asterisk/extensions.conf", capture=True).split()[0]
-    c.that(before == after, "extensions.conf is unchanged")
 
 
 CF_DB = "/storage/usbdisk1/mikopbx/custom_modules/ModuleCallFeedback/db/module.db"

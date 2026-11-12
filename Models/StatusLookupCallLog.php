@@ -14,8 +14,7 @@ use MikoPBX\Modules\Models\ModulesModelsBase;
  * @Indexes(
  *     [name='linkedid', columns=['linkedid'], type=''],
  *     [name='started_at', columns=['started_at'], type=''],
- *     [name='caller_started', columns=['caller', 'started_at'], type=''],
- *     [name='pin_id_started', columns=['pin_id', 'started_at'], type='']
+ *     [name='caller_started', columns=['caller', 'started_at'], type='']
  * )
  */
 class StatusLookupCallLog extends ModulesModelsBase
@@ -97,18 +96,6 @@ class StatusLookupCallLog extends ModulesModelsBase
 
     /** @Column(type="string", nullable=true, default="0") */
     public $is_test = '0';
-
-    /**
-     * Wrong PINs typed in this call, and the ID they were typed for (the
-     * last one, if several): the lookup refuses PINs for an ID that had too
-     * many wrong ones lately, whoever calls. Deleted with the call log.
-     *
-     * @Column(type="integer", nullable=true, default="0")
-     */
-    public $pin_fails = 0;
-
-    /** @Column(type="string", nullable=true) */
-    public $pin_id = '';
 
     public function initialize(): void
     {

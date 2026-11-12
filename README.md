@@ -6,7 +6,7 @@ A MikoPBX extension module that answers "Is it ready yet?" calls without a perso
 
 It suits any business whose customers call to ask where something stands: device and IT repair, auto workshops, pharmacies, shops and online stores.
 
-> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md).
+> **Status: in development.** Not released yet. What has changed so far is in [CHANGELOG.md](CHANGELOG.md). The built-in prompts aren't recorded yet: until they are, choose one of your own sound files for every prompt on the Call Flow tab before switching the line on.
 
 ![The Records tab: each ID with its status, date, last day, note and last change, with search, filters and CSV export](docs/screenshots/records.png)
 
@@ -61,7 +61,7 @@ Status Lookup appears in the sidebar for administrators. It takes internal numbe
 
 1. The caller hears a welcome and is asked for their number (the ID). They type it and press #; they can start typing during the prompt.
 2. The line looks the ID up and plays its status: one recorded sentence, optionally followed by the ID read back or the record's date ("Thursday, November twelfth").
-3. After the status, the line says goodbye, offers "press 1 to hear it again, 0 to speak to someone", or puts the caller straight through to the status's own destination (for a status that needs a conversation).
+3. After the status, the line says goodbye, offers "press 1 to hear it again, 0 to speak to someone" (up to three repeats), or puts the caller straight through to the status's own destination (for a status that needs a conversation).
 
 Along the way:
 
@@ -78,7 +78,7 @@ The line behaves like the PBX's own IVR menus: it has its own row in the call hi
 
 **Records** (the first tab): every record, newest change first, with search by ID or note, filters by status, by "not changed in 7, 30 or 90 days" and expired only, and changes to many records at once. **Export CSV** downloads the filtered records in the import format. Each record can have a **date** (spoken if its status says so), a **last day** (after it, callers hear "not found": a stale status is worse than none), a **note** for staff, a **phone number** and a **PIN**.
 
-**Import:** a CSV file in UTF-8 with a header row; `lookup_id` and `status_code` are needed, `note`, `expires`, `date`, `pin` and `phone` optional. **Add and Update** adds new IDs and changes existing ones; **Replace All** also deletes records that aren't in the file (but never one whose row was left out for a mistake). **Check File** shows what would happen first; nothing changes until you press Import. A file of up to 100,000 rows is applied in one go, while calls keep being answered.
+**Import:** a CSV file in UTF-8 with a header row; `lookup_id` and `status_code` are needed, `note`, `expires`, `date`, `pin` and `phone` optional. **Add and Update** adds new IDs and changes existing ones; **Replace All** also deletes records that aren't in the file (but never one whose row was left out for a mistake). **Check File** shows what would happen first; nothing changes until you press Import. A file of up to 5 MB and 100,000 rows is applied in one go, while calls keep being answered.
 
 **Statuses:** the statuses records can have, in the order staff see them. **Add from Template…** adds a business's statuses you don't have yet.
 
@@ -90,8 +90,8 @@ The line behaves like the PBX's own IVR menus: it has its own row in the call hi
 
 - **PIN:** a status can ask for the record's PIN (4 to 8 digits) before it is told; the pharmacy template does. PINs are stored only as keyed hashes and can't be shown or exported.
 - **Own phone only:** a status can be told only to a caller calling from the number saved on the record.
-- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. A caller number with 10 misses in an hour, or all callers together with 200, is put straight through to the operator. After 10 wrong PINs for one ID in a day, from any callers, that ID's PIN is no longer asked for.
-- **Call log:** callers' numbers and the IDs they typed are kept as long as the PBX keeps its call history, or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes everything about one ID or one caller number.
+- **Guessing protection:** IDs that aren't found, wrong PINs and calls from other numbers all sound the same ("not found") and count as misses. Once a caller number has 10 misses in an hour, or all callers together have 200 (both by default; you can change them), the next ID they type goes straight to the operator instead of being looked up. After 10 wrong PINs for one ID in a day, from any callers, test calls included, that ID's PIN is no longer asked for.
+- **Call log:** callers' numbers and the IDs they typed are kept as long as the PBX keeps its call history (if that is under 30 days, as in the PBX itself, for ever), or for the number of days you set; older calls are deleted every night. Expired records can be deleted every night too. **Forget Someone's Data** deletes one ID's record, the logged calls for it and its wrong-PIN counts, or every logged call from one caller number and that number on records.
 - MikoPBX's own Asterisk log records every key pressed on any call, IDs and PINs included; that is a PBX-wide setting outside the module.
 
 See [SECURITY.md](SECURITY.md) for what the module exposes and how to report a problem.
@@ -104,7 +104,7 @@ Shop, POS or ticketing software can keep the records up to date through the PBX'
 | --- | --- | --- |
 | GET | `records?search=&status=&expired=1&page=` | Lists records, newest change first, 50 a page. `search` is the start of an ID, or text in the note. |
 | GET | `records/{lookup_id}` | One record; 404 when there is none. |
-| PUT | `records/{lookup_id}` | Creates the record (201) or changes it (200). Fields left out keep their value; an empty string clears one. |
+| PUT | `records/{lookup_id}` | Creates the record (201) or changes it (200). Fields left out keep their value; an empty string clears one (except `pin`, which only `remove_pin` clears). |
 | DELETE | `records/{lookup_id}` | Deletes one record; 404 when there is none. |
 | POST | `records:import` | Imports a CSV file (add and update): `{"csv": "...", "dryRun": true}`. With `dryRun`, nothing changes and the answer says what would. |
 | POST | `records-replace:import` | The same, but the file becomes the full list: records not in it are deleted. |
@@ -121,7 +121,13 @@ curl -X PUT "https://pbx.example.com/pbxcore/api/v3/module-status-lookup/records
 
 **Access.** Create an API key on the PBX's API keys page and allow it the paths it needs, for example `/api/v3/module-status-lookup/records` with write access. Replacing all records is a path of its own (`/api/v3/module-status-lookup/records-replace`), so a key that updates records can't delete them all unless it is given that too. A key without the right access is refused with 401. Administrators' logins work as well, and, as everywhere in the PBX's REST API, scripts running on the PBX itself (localhost) need no key. A record changed through the API shows "API" and the key's description as who changed it.
 
-A refusal answers 400 with an error code in `data.error` and its details in `data.params`, such as `lookup_id` (the ID isn't within the call flow's lengths), `record_status` (unknown status code), `status_required`, `unknown_fields`, `field_type` (a field that isn't text, or a `dryRun` that isn't true or false), `pin`, `phone`, `note`, `note_http` or `date`.
+A refusal answers 400 with an error code in `data.error` and its details in `data.params`:
+
+- records: `lookup_id` (the ID isn't within the call flow's lengths), `record_status` (unknown status code), `status_required`, `unknown_fields`, `field_type` (a field that isn't text, or a `dryRun` that isn't true or false), `pin`, `phone`, `note`, `note_http`, `date`, `bad_request` (an unknown `status` filter);
+- imports: `file_empty`, `file_size`, `file_encoding`, `file_header`, `file_rows`, `replace_empty` (Replace All with no usable row), `statuses_changed` (a status was renamed or deleted during the import; send it again);
+- stats: `range_dates`, `range_long`.
+
+A login whose role isn't administrator gets 403 (`forbidden`); an ID of more than 20 digits in the path gets 404.
 
 The PBX's REST layer treats any text value starting with "http" as a web address and removes its spaces and non-Latin letters before the module sees it, so a note starting with "http" is refused rather than stored damaged; put a word before the link.
 

@@ -37,6 +37,18 @@ final class RecordEditorTest extends TestCase
             'expires_on' => ''], [4, 10], 'admin', $at);
     }
 
+    public function testARecordOutsideNarrowedLengthsCanStillBeEdited(): void
+    {
+        $id = $this->add('10445');
+        // The lengths are narrowed to 6-8 afterwards: the record keeps its ID and can be changed.
+        $this->editor->save(['id' => (string)$id, 'lookup_id' => '10445', 'status_code' => 'PARTS', 'note' => 'kept', 'status_date' => '',
+            'expires_on' => ''], [6, 8], 'admin', self::NOW);
+        self::assertSame('PARTS', $this->db->query("SELECT status_code FROM m_StatusLookupRecords WHERE lookup_id = '10445'")->fetchColumn());
+        // A new record, or a new ID, must fit the lengths.
+        $this->expectException(EditorException::class);
+        $this->editor->save(['id' => (string)$id, 'lookup_id' => '10446', 'status_code' => 'PARTS'], [6, 8], 'admin', self::NOW);
+    }
+
     public function testAddAndList(): void
     {
         $this->add('10445', ['note' => "Toyota\nVios", 'status_date' => '2026-11-12', 'expires_on' => '2026-11-30']);

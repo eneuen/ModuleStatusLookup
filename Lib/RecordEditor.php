@@ -79,7 +79,14 @@ final class RecordEditor
         $id = ($input['id'] ?? '') !== '' ? self::id($input['id']) : null;
         $lookupId = is_string($input['lookup_id'] ?? null) ? trim($input['lookup_id']) : '';
         [$min, $max] = $lengths;
-        if (preg_match('/^[0-9]{' . $min . ',' . $max . '}\z/', $lookupId) !== 1) {
+        // A record kept when the ID lengths were narrowed can still be changed, as long as its ID stays as it is.
+        $sameId = false;
+        if ($id !== null && preg_match('/^[0-9]{1,20}\z/', $lookupId) === 1) {
+            $stmt = $this->db->prepare('SELECT 1 FROM m_StatusLookupRecords WHERE id = ? AND lookup_id = ?');
+            $stmt->execute([$id, $lookupId]);
+            $sameId = $stmt->fetchColumn() !== false;
+        }
+        if (!$sameId && preg_match('/^[0-9]{' . $min . ',' . $max . '}\z/', $lookupId) !== 1) {
             throw new EditorException('lookup_id', ['min' => $min, 'max' => $max]);
         }
         $status = is_string($input['status_code'] ?? null) ? $input['status_code'] : '';

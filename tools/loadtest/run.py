@@ -65,8 +65,10 @@ def write_csv(n):
     body = json.dumps({"csv": "\r\n".join(lines) + "\r\n"})
     local = Path(__file__).resolve().parent / ".import.json"
     local.write_text(body)
-    docker("cp", str(local), f"{PBX_CONTAINER}:{CSV_IN_CONTAINER}")
-    local.unlink()
+    try:
+        docker("cp", str(local), f"{PBX_CONTAINER}:{CSV_IN_CONTAINER}")
+    finally:
+        local.unlink()
     return len(body)
 
 
@@ -79,6 +81,14 @@ def import_once():
     except ValueError:
         body = {"raw": out[:200]}
     return time.time() - started, body
+
+
+def clean_up(probe):
+    """The helper context, the CSV in the container, the import history and the probe's own records back."""
+    asterisk(f"dialplan remove context {HELPER}")
+    docker("exec", PBX_CONTAINER, "rm", "-f", CSV_IN_CONTAINER, check=False)
+    sql("DELETE FROM m_StatusLookupImports WHERE file_name = 'API'")
+    probe.configure()
 
 
 def main():
@@ -103,21 +113,26 @@ def main():
             imports.append(import_once())
 
     since_log, since_id = log_size(), probe.last_log_id()
-    worker = threading.Thread(target=keep_importing)
+    # A daemon thread, stopped in every case: a failed or interrupted run must not leave imports running.
+    worker = threading.Thread(target=keep_importing, daemon=True)
     worker.start()
-    time.sleep(0.5)
-    print(f"Placing {args.calls} calls while imports run")
-    add_helper()
-    originate(probe.number, args.calls)
-    deadline = time.time() + 120
     found = []
-    while time.time() < deadline:
-        found = rows(f"SELECT * FROM m_StatusLookupCallLog WHERE id > {since_id} ORDER BY id")
-        if len(found) >= args.calls:
-            break
-        time.sleep(2)
-    stop.set()
-    worker.join()
+    try:
+        time.sleep(0.5)
+        print(f"Placing {args.calls} calls while imports run")
+        add_helper()
+        originate(probe.number, args.calls)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            found = rows(f"SELECT * FROM m_StatusLookupCallLog WHERE id > {since_id} ORDER BY id")
+            if len(found) >= args.calls:
+                break
+            time.sleep(2)
+    finally:
+        stop.set()
+        worker.join(timeout=150)
+        if worker.is_alive() or sys.exc_info()[0] is not None:
+            clean_up(probe)
 
     ok = True
 
@@ -149,10 +164,7 @@ def main():
             stamps.setdefault(chan.group(1), {})[event.group(1)] = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
     waits = [s["lookup"] - s["input"] for s in stamps.values() if "lookup" in s and "input" in s]
     check(waits and max(waits) <= 1, f"each lookup answered within a second of the ID (longest: {max(waits or [0]):.0f} s)")
-    asterisk(f"dialplan remove context {HELPER}")
-    docker("exec", PBX_CONTAINER, "rm", "-f", CSV_IN_CONTAINER)
-    sql("DELETE FROM m_StatusLookupImports WHERE file_name = 'API'")
-    probe.configure()        # back to the probe's own records
+    clean_up(probe)
     print("\nLoad test passed." if ok else "\nLoad test failed.")
     sys.exit(0 if ok else 1)
 

@@ -124,7 +124,7 @@ final class Importer
                 strlen($id) < $min || strlen($id) > $max => 'id_length',
                 isset($seen[$id]) => 'duplicate',
                 !isset($statuses[strtoupper($row['status_code'] ?? '')]) => 'status',
-                mb_strlen($row['note'] ?? '') > RecordEditor::MAX_NOTE => 'note',
+                mb_strlen(self::note($row['note'] ?? '')) > RecordEditor::MAX_NOTE => 'note',
                 ($row['pin'] ?? '') !== '' && (!Pin::isValid($row['pin']) || $this->pin === null) => 'pin',
                 !self::isPhone($row['phone'] ?? '') => 'phone',
                 !self::isDate($row['expires_on'] ?? '') => 'expires',
@@ -184,6 +184,13 @@ final class Importer
         $fileName = mb_substr(trim((string)preg_replace('/[\x00-\x1F\x7F]+/', ' ', $fileName)), 0, 120);
 
         return Databases::immediate($db, function () use ($db, $mode, $by, $fileName, $now, $source): array {
+            // A status renamed or deleted since the file was read: its records would be unreachable. Check again.
+            $codes = array_flip($db->query('SELECT code FROM m_StatusLookupStatuses')->fetchAll(PDO::FETCH_COLUMN));
+            foreach ($this->rows as $row) {
+                if (!isset($codes[$row['status_code']])) {
+                    throw new EditorException('statuses_changed');
+                }
+            }
             $existing = $this->existing($db);
             $plan = $this->plan($existing, $mode);
             $insert = $db->prepare("INSERT INTO m_StatusLookupRecords (lookup_id, status_code, note, expires_on, status_date, phone, pin_hash,

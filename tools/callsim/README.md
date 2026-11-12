@@ -52,7 +52,7 @@ If the phones don't register during `setup`, they may have tried before the PBX 
 
 | Scenario | Checks |
 | --- | --- |
-| `valid_id` | A valid ID with #: the status plays, then the repeat menu; no key, so goodbye and hang-up |
+| `valid_id` | A valid ID with #: the status plays with the ID read back, then the repeat menu; no key, so goodbye and hang-up |
 | `leading_zeros_no_hash` | An ID with leading zeros, typed without #, is found after the digit timeout; its date is spoken as weekday, month and day |
 | `not_found_three_times` | Three unknown IDs, then the too-many-tries destination rings |
 | `zero_first` | 0 at the first prompt reaches the operator without a lookup |
@@ -69,6 +69,19 @@ If the phones don't register during `setup`, they may have tried before the PBX 
 | `inactive` | A line that isn't switched on doesn't answer, so the route moves on; the call is still logged |
 | `lookup_script_fails` | With the lookup script's link missing, a valid ID sends the caller to the fault destination |
 | `time_limit` | A caller who never types is sent to the too-many-tries destination at the 2-minute limit (takes about 2 minutes) |
+| `pin_right` | A status that asks for the PIN: the right PIN plays the status; the PIN as a whole is in no variable or dialplan line |
+| `pin_wrong` | A wrong PIN is heard as not found, counts as a miss and against the ID; the caller can try another ID |
+| `no_pin_stored` | A PIN status on a record without a PIN puts the caller through to the operator |
+| `zero_at_pin` | 0 at the PIN prompt reaches the operator |
+| `pin_locked` | An ID with 10 wrong PINs in the last day, from other callers: its PIN isn't asked for, the operator rings |
+| `callerid_match` | A status only for the record's phone, called from that phone: the status plays |
+| `callerid_mismatch` | The same status called from another number: heard as not found |
+| `no_phone_stored` | The same status on a record without a phone: the operator rings |
+| `not_reachable_from_trunk` | The carrier dials the line's number as a DID with no route for it: the lookup isn't reached |
+| `long_conversation_after_lookup` | A caller put through to the operator talks past the lookup's 2-minute limit without being cut off (about 2.5 minutes) |
+| `hostile_caller_id` | A caller ID `123;Hangup()` with an HTML name: the lookup runs and the call log keeps only the digits |
+| `dialplan_injection_refused` | Values that would break out of the dialplan are refused through the page; `extensions.conf` is unchanged |
+| `with_call_feedback` | With the Call Feedback module surveying the route: a lookup-only caller isn't surveyed, one put through to a person is (skipped without Call Feedback) |
 
 Every scenario that completes a call also checks the one call-log row the worker wrote for it.
 

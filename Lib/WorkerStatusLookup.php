@@ -41,6 +41,8 @@ class WorkerStatusLookup extends WorkerBase
     /** The nightly clean-up runs at this hour, PBX time. */
     private const int MAINTENANCE_HOUR = 3;
 
+    private const int MAINTENANCE_RETRY = 900;
+
     /** How long the worker waits for the database's write lock; an import may hold it for a moment. */
     private const int LOCK_WAIT_MS = 1000;
 
@@ -92,7 +94,9 @@ class WorkerStatusLookup extends WorkerBase
                 SystemMessages::sysLogMsg(static::class, "Clean-up: deleted {$deleted['calls']} old calls and {$deleted['records']} expired records", LOG_INFO);
             }
         } catch (Throwable $e) {
-            SystemMessages::sysLogMsg(static::class, 'Clean-up failed: ' . $e->getMessage(), LOG_ERR);
+            // Try again soon (an import may hold the database); retention shouldn't slip a whole day.
+            $this->nextMaintenance = time() + self::MAINTENANCE_RETRY;
+            SystemMessages::sysLogMsg(static::class, 'Clean-up failed, trying again in 15 minutes: ' . $e->getMessage(), LOG_WARNING);
         }
     }
 
@@ -118,8 +122,9 @@ class WorkerStatusLookup extends WorkerBase
 
     /**
      * The database was busy (a large import): the record goes back to the
-     * queue a few seconds later, with a count, so nothing is lost and the
-     * worker isn't stuck waiting. The worker drops a record it already has,
+     * queue a few seconds later, with a count, so the worker isn't stuck
+     * waiting. (The core's queue clean-up drops jobs nobody picks up for
+     * minutes, so a record can still be lost while the worker is down.) The worker drops a record it already has,
      * so a retry can't log a call twice.
      */
     private function retryLater(BeanstalkClient $message): void
