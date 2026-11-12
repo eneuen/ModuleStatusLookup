@@ -15,11 +15,23 @@
       else node.setAttribute(k, v);
     });
     children.flat().forEach((c) => {
-      if (c !== null && c !== void 0 && c !== false) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+      if (c !== null && c !== void 0 && c !== false && c !== "") node.append(c instanceof Node ? c : document.createTextNode(String(c)));
     });
     return node;
   }
   var fill = (node, ...children) => node.replaceChildren(...children.flat().filter((c) => c !== null && c !== void 0 && c !== false));
+  var seconds = (n) => new Intl.NumberFormat(LOCALE, { style: "unit", unit: "second", unitDisplay: "short" }).format(n);
+  function labelCells(root) {
+    root.querySelectorAll("table.sl-table").forEach((table) => {
+      const names = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+      table.querySelectorAll("tbody tr").forEach((tr) => [...tr.children].forEach((td, i) => {
+        if (names[i]) td.dataset.label = names[i];
+      }));
+    });
+  }
+  new MutationObserver((changes) => changes.forEach((c) => c.addedNodes.forEach((n) => {
+    if (n.nodeType === 1) labelCells(n.matches && n.matches("table") ? n.parentNode || n : n);
+  }))).observe(document.documentElement, { childList: true, subtree: true });
   var LOCALE = (() => {
     try {
       return Intl.getCanonicalLocales((document.documentElement.lang || "").replace(/_/g, "-"))[0] || void 0;
@@ -67,6 +79,24 @@
     gone_too_many_tries_number: ["sl_Problem_gone_too_many", "The destination after the last try no longer exists."],
     gone_fault_number: ["sl_Problem_gone_fault", "The destination for failed lookups no longer exists."]
   };
+  function problemField(code) {
+    if (code === "no_operator") return "operator_number";
+    if (code === "no_number" || code === "not_registered") return "number";
+    if (code.startsWith("gone_")) return code.slice(5);
+    if (code.startsWith("prompt_")) return `${code.slice(7)}_prompt_id`;
+    return null;
+  }
+  function showField(name, message = "") {
+    const control = $id(`sl-${name}`);
+    const box = control && control.closest(".field");
+    if (!box) return;
+    box.classList.add("error");
+    box.querySelectorAll(".sl-field-error").forEach((n) => n.remove());
+    if (message) box.append(el("div", { class: "ui basic red pointing prompt label sl-field-error", role: "alert", text: message }));
+    window.scrollTo({ top: box.getBoundingClientRect().top + window.scrollY - 120, behavior: "smooth" });
+    const focusable = box.querySelector(".ui.dropdown") || control;
+    if (focusable && focusable.focus) focusable.focus({ preventScroll: true });
+  }
   function problemText(code) {
     if (PROBLEMS[code]) return t(PROBLEMS[code][0], PROBLEMS[code][1]);
     const prompt = code.startsWith("prompt_") ? `${code.slice(7)}_prompt_id` : null;
@@ -363,10 +393,19 @@
     const lines = [];
     if (!on) {
       lines.push(el("div", { text: switchedOn ? t("sl_StateOffProblems", "The line is switched on, but can't answer until this is fixed:") : t("sl_StateOffSwitched", "The line is switched off. Calls to it aren't answered; an incoming route moves on to its next rule or default action.") }));
-      if (data.problems.length) lines.push(el("ul", {}, data.problems.map((p) => el("li", { text: problemText(p) }))));
+      if (data.problems.length) {
+        lines.push(el("ul", {}, data.problems.map((p) => {
+          const name = problemField(p);
+          return el("li", {}, name ? el("a", { href: "#", text: problemText(p), onclick: (e) => {
+            e.preventDefault();
+            showField(name);
+          } }) : problemText(p));
+        })));
+      }
     }
     const toggle = el("button", {
-      class: `ui ${switchedOn ? "basic" : "positive"} button`,
+      // Blocked: a plain disabled button, not a pale green one that looks broken.
+      class: `ui ${switchedOn ? "basic" : data.problems.length ? "" : "positive"} button`,
       type: "button",
       id: "sl-toggle",
       disabled: !switchedOn && data.problems.length > 0,
@@ -403,11 +442,11 @@
       "div",
       { class: "sl-inline" },
       field(t("sl_Number", "Internal Number"), el("input", { type: "text", id: "sl-number", value: s.internal_number, inputmode: "numeric", maxlength: "8", size: "10" })),
-      el("button", { class: "ui button", type: "button", onclick: changeNumber }, t("sl_ChangeNumber", "Change Number"))
+      el("button", { class: "ui basic button", type: "button", onclick: changeNumber }, t("sl_ChangeNumber", "Change Number"))
     ));
     const form = el(
       "form",
-      { class: "ui form", id: "sl-callflow-form", onsubmit: (e) => {
+      { class: "ui form", id: "sl-callflow-form", novalidate: true, onsubmit: (e) => {
         e.preventDefault();
         saveCallFlow();
       } },
@@ -484,6 +523,10 @@
     );
     initPromptMenus(box);
     $(form).find(".ui.checkbox").checkbox();
+    data.problems.map(problemField).filter(Boolean).forEach((name) => {
+      const control = $id(`sl-${name}`);
+      if (control && control.closest(".field")) control.closest(".field").classList.add("warning");
+    });
     $(box).find("select.ui.dropdown:not(.sl-prompt-select)").dropdown({ fullTextSearch: true, placeholder: false });
     form.addEventListener("input", markDirty);
     form.addEventListener("change", markDirty);
@@ -512,6 +555,11 @@
   function markDirty(e) {
     if (e && e.target && e.target.matches && e.target.matches(".ui.dropdown input.search")) return;
     if (e && e.target && e.target.closest && e.target.closest(".sl-forget")) return;
+    if (e && e.target && e.target.closest && e.target.closest(".field")) {
+      const box = e.target.closest(".field");
+      box.classList.remove("error", "warning");
+      box.querySelectorAll(".sl-field-error").forEach((n) => n.remove());
+    }
     state.dirty = true;
     $id("sl-save-hint").textContent = t("sl_UnsavedChanges", "Unsaved changes");
   }
@@ -520,59 +568,68 @@
     return cdr >= 30 ? plural("sl_RetentionCdr", cdr, { one: "0: as long as the PBX keeps its call history (now {n} day).", other: "0: as long as the PBX keeps its call history (now {n} days)." }) : t("sl_RetentionForever", "0: as long as the PBX keeps its call history, which is now for ever.");
   }
   function forgetPart() {
-    const row = (id, labelText, placeholder, action, title, text, done) => {
-      const input = el("input", { type: "text", id, inputmode: "numeric", maxlength: "40", placeholder, autocomplete: "off" });
-      const button = el("button", { class: "ui basic red button", type: "button", onclick: () => {
-        const value = input.value.trim();
-        if (!value) {
-          input.focus();
-          return;
-        }
-        confirmDialog(title, sub(text, { value }), t("sl_Forget", "Forget")).then((ok) => {
-          if (!ok) return;
-          busy(button, () => post(action, action === "forgetId" ? { id: value } : { phone: value }).then((d) => {
-            input.value = "";
-            $id("sl-forget-note").textContent = done(d);
-          }).fail((xhr) => showError(saveFailed(xhr))));
-        });
-      } }, t("sl_Forget", "Forget"));
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          button.click();
-        }
-      });
-      return el("div", { class: "sl-inline" }, field(labelText, input), button);
-    };
     return el(
       "div",
       { class: "sl-forget" },
       el("h5", { class: "ui header", text: t("sl_SectionForget", "Forget Someone's Data") }),
       el("div", { class: "sl-note", text: t("sl_SectionForgetHint", "For a customer who asks to have their data deleted. This can't be undone; the PBX's system log notes who did it, without the ID or number.") }),
-      el(
-        "div",
-        {},
-        row(
-          "sl-forget-id",
-          t("sl_ForgetId", "An ID"),
-          "10445",
-          "forgetId",
-          t("sl_ForgetIdTitle", "Forget This ID?"),
-          t("sl_ForgetIdText", "The record {value} and every call that typed it are deleted."),
-          (d) => `${d.records ? t("sl_ForgotRecord", "The record was deleted.") : t("sl_ForgotNoRecord", "There was no record with this ID.")} ${plural("sl_ForgotCalls", d.calls, { one: "{n} call was deleted from the call log.", other: "{n} calls were deleted from the call log." })}`
-        ),
-        row(
-          "sl-forget-phone",
-          t("sl_ForgetPhone", "A caller number"),
-          "4915112345678",
-          "forgetCaller",
-          t("sl_ForgetPhoneTitle", "Forget This Number?"),
-          t("sl_ForgetPhoneText", "Every call from {value} is deleted, and the number is removed from records. Numbers match on their last digits, as for the caller-ID check."),
-          (d) => `${plural("sl_ForgotCalls", d.calls, { one: "{n} call was deleted from the call log.", other: "{n} calls were deleted from the call log." })} ${plural("sl_ForgotPhones", d.records, { one: "The number was removed from {n} record.", other: "The number was removed from {n} records." })}`
-        )
-      ),
+      el("button", { class: "ui basic button sl-forget-open", type: "button", onclick: openForget }, t("sl_ForgetOpen", "Forget Someone's Data\u2026")),
       el("div", { class: "sl-note", id: "sl-forget-note", role: "status" })
     );
+  }
+  function openForget() {
+    const kinds = {
+      id: [
+        t("sl_ForgetId", "An ID"),
+        "forgetId",
+        "id",
+        t("sl_ForgetIdText", "The record {value} and every call that typed it are deleted."),
+        (d) => `${d.records ? t("sl_ForgotRecord", "The record was deleted.") : t("sl_ForgotNoRecord", "There was no record with this ID.")} ${plural("sl_ForgotCalls", d.calls, { one: "{n} call was deleted from the call log.", other: "{n} calls were deleted from the call log." })}`
+      ],
+      phone: [
+        t("sl_ForgetPhone", "A caller number"),
+        "forgetCaller",
+        "phone",
+        t("sl_ForgetPhoneText", "Every call from {value} is deleted, and the number is removed from records. Numbers match on their last digits, as for the caller-ID check."),
+        (d) => `${plural("sl_ForgotCalls", d.calls, { one: "{n} call was deleted from the call log.", other: "{n} calls were deleted from the call log." })} ${plural("sl_ForgotPhones", d.records, { one: "The number was removed from {n} record.", other: "The number was removed from {n} records." })}`
+      ]
+    };
+    const kind = select("sl-forget-kind", Object.entries(kinds).map(([k, v]) => [k, v[0]]), "id", { class: "ui dropdown" });
+    const input = el("input", { type: "text", id: "sl-forget-value", inputmode: "numeric", maxlength: "40", autocomplete: "off" });
+    const what = el("div", { class: "sl-note" });
+    const update = () => {
+      what.textContent = input.value.trim() ? sub(kinds[kind.value][3], { value: input.value.trim() }) : "";
+    };
+    kind.addEventListener("change", update);
+    input.addEventListener("input", update);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        $id("sl-confirm-ok").click();
+      }
+    });
+    const form = el("div", { class: "ui form" }, el(
+      "div",
+      { class: "two fields" },
+      field(t("sl_ForgetWhat", "Forget"), kind),
+      field(t("sl_ForgetValue", "Number"), input)
+    ), what);
+    const ask = confirmDialog(
+      t("sl_SectionForget", "Forget Someone's Data"),
+      t("sl_ForgetDialogText", "This deletes data at once and can't be undone."),
+      t("sl_Forget", "Forget"),
+      form
+    );
+    $(kind).dropdown({ placeholder: false });
+    setTimeout(() => input.focus(), 300);
+    ask.then((ok) => {
+      const value = input.value.trim();
+      if (!ok || !value) return;
+      const [, action, param, , done] = kinds[kind.value];
+      busy(document.querySelector(".sl-forget-open"), () => post(action, { [param]: value }).then((d) => {
+        $id("sl-forget-note").textContent = done(d);
+      }).fail((xhr) => showError(saveFailed(xhr))));
+    });
   }
   function readCallFlow() {
     const values = {};
@@ -609,6 +666,7 @@
         return;
       }
       showError(saveFailed(xhr));
+      if (body && body.params && body.params.field) showField(body.params.field, saveFailed(xhr));
     }));
   }
   function toggleLine(on) {
@@ -713,19 +771,36 @@
     );
   }
   function templatePicker(firstRun) {
+    const templates = state.templates.filter((tpl) => firstRun || tpl.statuses.length);
     return el(
       "div",
       { class: "sl-templates" },
-      el("h4", { class: "ui header", text: firstRun ? t("sl_FirstRunTitle", "What Kind of Business Is This?") : t("sl_AddFromTemplateTitle", "Add Statuses from a Template") }),
+      el(
+        "div",
+        { class: "sl-section-head" },
+        el("h4", { class: "ui header", text: firstRun ? t("sl_FirstRunTitle", "What Kind of Business Is This?") : t("sl_AddFromTemplateTitle", "Add Statuses from a Template") }),
+        firstRun ? null : el(
+          "button",
+          { class: "ui basic button", type: "button", onclick: () => {
+            state.showTemplates = false;
+            renderStatuses(state.statuses);
+          } },
+          t("sl_Close", "Close")
+        )
+      ),
       el("div", { class: "sl-note sl-narrow", text: firstRun ? t("sl_FirstRunHint", "A template adds the statuses that business usually needs, with the wording to record for each, and sets how long IDs are. Everything can be changed afterwards.") : t("sl_AddFromTemplateHint", "Only statuses you don't have yet (by code) are added; nothing is changed or deleted.") }),
-      el("div", { class: "sl-template-cards" }, state.templates.map((tpl) => el(
+      el("div", { class: "sl-template-cards" }, templates.map((tpl) => el(
         "div",
         { class: "sl-template-card" },
         el("div", { class: "sl-template-name", text: tpl.name }),
         el("div", { class: "sl-sub-line", text: tpl.description }),
         el("div", { class: "sl-sub-line", text: tpl.id_length[0] === tpl.id_length[1] ? plural("sl_TemplateIdExact", tpl.id_length[0], { one: "IDs of {n} digit", other: "IDs of {n} digits" }) : sub(t("sl_TemplateIdLength", "IDs of {min}\u2013{max} digits"), { min: tpl.id_length[0], max: tpl.id_length[1] }) }),
         tpl.statuses.length ? el("ul", { class: "sl-template-statuses" }, tpl.statuses.map((x) => el("li", { text: x.name }))) : null,
-        el("button", { class: "ui basic button", type: "button", onclick: (e) => applyTemplate(tpl, e.currentTarget) }, t("sl_UseTemplate", "Use This Template"))
+        el(
+          "button",
+          { class: "ui basic button", type: "button", onclick: (e) => applyTemplate(tpl, e.currentTarget) },
+          tpl.statuses.length ? t("sl_UseTemplate", "Use This Template") : t("sl_StartEmpty", "Start Empty")
+        )
       )))
     );
   }
@@ -1025,6 +1100,11 @@ ${x.script}\r
       )
     );
   }
+  function changedBy(r) {
+    const how = SOURCES[r.source] && !(r.source === "api" && /^API key/.test(r.updated_by)) ? label(SOURCES[r.source]) : "";
+    const text = [r.updated_by, how].filter(Boolean).join(" \xB7 ");
+    return el("div", { class: "sl-sub-line sl-ellipsis", text, title: text });
+  }
   function recordRow(r, today, withDate) {
     const expired = r.expires_on && r.expires_on < today;
     const box = el("input", { type: "checkbox", checked: records.selected.has(r.id), "aria-label": sub(t("sl_SelectRecord", "Select {id}"), { id: r.lookup_id }) });
@@ -1053,12 +1133,7 @@ ${x.script}\r
       el("td", { class: "sl-nowrap" }, expired ? el("span", { class: "sl-warn-text", text: sub(t("sl_ExpiredOn", "Expired {date}"), { date: isoText(r.expires_on) }) }) : isoText(r.expires_on)),
       el("td", { class: "sl-note-cell", text: r.note }),
       // Who changed it may be a long API key name: it wraps, the date doesn't.
-      el(
-        "td",
-        { class: "sl-changed-cell" },
-        el("div", { class: "sl-nowrap", text: shortDateTime(r.updated_at) }),
-        el("div", { class: "sl-sub-line", text: [r.updated_by, SOURCES[r.source] ? label(SOURCES[r.source]) : ""].filter(Boolean).join(" \xB7 ") })
-      ),
+      el("td", { class: "sl-changed-cell" }, el("div", { class: "sl-nowrap", text: shortDateTime(r.updated_at) }), changedBy(r)),
       el(
         "td",
         { class: "sl-actions-cell" },
@@ -1331,6 +1406,8 @@ ${x.script}\r
   function renderPreview() {
     const p = importState.preview;
     const box = $id("sl-import-preview");
+    const check = $id("sl-import-check");
+    if (check) check.className = `ui ${importState.file && !p ? "primary" : "basic"} button`;
     if (!p) {
       fill(box);
       return;
@@ -1693,7 +1770,8 @@ ${x.script}\r
       grid: { left: 8, right: 40, top: 8, bottom: 8, containLabel: true },
       tooltip: { trigger: "item", formatter: (p) => `${esc(outcomeText(rows[p.dataIndex].outcome))}: <b>${esc(count(p.value))}</b>` },
       xAxis: { type: "value", minInterval: 1, show: false },
-      yAxis: { type: "category", data: rows.map((r) => outcomeText(r.outcome)), axisLabel: { width: 220, overflow: "truncate" } },
+      // Long labels (Russian, phones) wrap instead of being cut off.
+      yAxis: { type: "category", data: rows.map((r) => outcomeText(r.outcome)), axisLabel: { width: Math.min(220, Math.round(c.getWidth() * 0.45)), overflow: "break" } },
       series: [{
         type: "bar",
         barMaxWidth: 18,
@@ -1766,7 +1844,7 @@ ${x.script}\r
       el("td", {}, r.status_code ? statusLabel(r.status_code) : "\u2014"),
       el("td", { text: r.target ? destinationName(r.target) : "\u2014" }),
       el("td", { class: "sl-num", text: plural("sl_Tries", r.tries, { one: "{n} try", other: "{n} tries" }) }),
-      el("td", { class: "sl-num", text: `${count(r.seconds)} s` })
+      el("td", { class: "sl-num", text: seconds(r.seconds) })
     ));
     fill(
       box,

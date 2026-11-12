@@ -240,3 +240,26 @@
 .sl-page .sl-changed-cell { min-width: 9em; max-width: 16em; }
 /* A wide table scrolls sideways inside the page instead of pushing its buttons out of view. */
 .sl-page .sl-table-scroll { overflow-x: auto; }
+.sl-page .sl-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16em; }
+.sl-page #sl-import-preview { max-width: 44rem; }
+
+/* ---------------------------------------------------------------- phones */
+@media (max-width: 767px) {
+    /* Every tab stays reachable: the strip wraps instead of hiding Call Flow off-screen. */
+    .sl-page #sl-tabs.ui.tabular.menu { flex-wrap: wrap; overflow: visible; }
+    .sl-page #sl-tabs.ui.tabular.menu .item { padding: .7em .9em; }
+    .sl-page #sl-tabs.ui.tabular.menu .right.menu, .sl-page #sl-tabs.ui.tabular.menu .item.right { margin-left: 0 !important; }
+    /* Section buttons and the records toolbar take the full width, one under another. */
+    .sl-page .sl-section-actions { width: 100%; }
+    .sl-page .sl-section-actions .ui.button { flex: 1 1 auto; }
+    .sl-page .sl-toolbar > *, .sl-page .sl-toolbar .sl-search, .sl-page .sl-toolbar .ui.dropdown { width: 100% !important; min-width: 0; }
+    .sl-page .sl-toolbar-end { margin-left: 0; }
+    .sl-page .sl-toolbar-end .ui.button { flex: 1 1 auto; }
+    /* Table rows become cards; each cell says which column it is. */
+    .sl-page table.sl-table.ui.table td[data-label]::before {
+        content: attr(data-label); display: block; font-size: .8em; font-weight: 600; color: var(--sl-muted); margin-bottom: 2px;
+    }
+    .sl-page table.sl-table.ui.table td[data-label]:empty { display: none !important; }
+    .sl-page table.sl-table.ui.table td.sl-num { text-align: left; }
+    .sl-page .sl-ellipsis { max-width: none; white-space: normal; }
+}
